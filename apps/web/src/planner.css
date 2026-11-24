@@ -1,0 +1,33 @@
+.planner-tools {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.planner-tools label {
+  display: grid;
+  gap: 4px;
+}
+.planner-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.planner-board .lane,
+.planner-board .task {
+  border: 1px solid #8793a655;
+  border-radius: 10px;
+  padding: 14px;
+  overflow-wrap: anywhere;
+}
+.planner-board .task {
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+@media (max-width: 760px) {
+  .planner-board {
+    grid-template-columns: 1fr;
+  }
+}

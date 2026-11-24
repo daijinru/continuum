@@ -1,0 +1,1 @@
+CREATE TABLE goal_limits(goal_id TEXT PRIMARY KEY REFERENCES goals,config TEXT NOT NULL);

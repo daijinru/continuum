@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+.env.*
+!.env.example
+apps/web/dist/
+.env
+.local/
+test-results/
+*.sqlite*
+packages/codex-adapter/schema/*
+!packages/codex-adapter/schema/ClientRequest.json
