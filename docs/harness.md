@@ -41,7 +41,7 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 ## 轻量验证和自动合并
 
-工作分支推送后运行 `pnpm harness pr submit`，或首次创建时用 `pnpm harness pr submit --issue 42`，将 `Closes #42` 写入新 PR。已有 PR 会复用，保留其描述与关单约定。提交前请检查本分支相对 `main` 的**全部已提交改动**。工作区中的未提交修改不会进 PR。
+受托交付 PR 时，先检查本分支相对 `main` 的**全部已提交改动**，然后推送并运行回执中 `next` 给出的 `pnpm harness pr submit`。如果 HEAD 有唯一的 `Refs: #42` 尾注，回执会带上 `--issue 42`，首次创建时将 `Closes #42` 写入新 PR。已有 PR 会复用，保留其描述与关单约定。用户要求仅评审时不执行 `pr submit`。工作区中的未提交修改不会进 PR。
 
 仓库启用 GitHub 原生 auto-merge，`main` 的活动规则集要求通过 PR 和 GitHub Actions 的 `lint` 检查（应用 ID `15368`）。GitHub 检出 PR 合并候选、按锁文件安装依赖、运行 `pnpm lint`。新提交触发新检查。harness 只为当前工作分支的 PR 申请自动合并，校验已推送的 HEAD，不使用管理员绕过；普通 PR 只自动验证，不自动申请合并。若分支落后且规则要求同步，请先更新分支再验证。
 

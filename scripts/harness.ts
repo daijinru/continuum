@@ -14,7 +14,7 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   commit show HEAD|SHA                 单次提交及文件统计
   commit create [--issue N] "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
-  commit push                          非强制推送当前工作分支
+  commit push                          推送当前工作分支，返回提交 PR 的下一条命令
   pr submit [--issue N]                为已推送的工作分支开/复用 PR，lint 通过后合并
   branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
   branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
@@ -316,8 +316,15 @@ async function main(args: string[]) {
       throw Error("请从工作分支发布；此命令不推送默认分支或游离 HEAD。");
     checkRemote(git("remote", "get-url", "--push", "--all", "origin"));
     const sha = git("rev-parse", "HEAD").trim();
+    const refs = git("log", "-1", "--format=%(trailers:key=Refs,valueonly)", sha).trim();
+    const issue = /^#([1-9]\d{0,9})$/.exec(refs)?.[1];
     git("push", "origin", `${sha}:refs/heads/${b}`);
-    return { branch: b, sha, url: `https://github.com/${repo}/commit/${sha}` };
+    return {
+      branch: b,
+      sha,
+      url: `https://github.com/${repo}/commit/${sha}`,
+      next: "pnpm harness pr submit" + (issue ? ` --issue ${issue}` : ""),
+    };
   }
   requireArgs(op === "create");
   let n: string | undefined;
