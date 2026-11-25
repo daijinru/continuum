@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { Store, Problem, now, uid } from "./db.ts";
 import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
+import { monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, sendInput, timeline } from "./main-conversation.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import {
@@ -110,6 +111,11 @@ export async function createServer(
   post("/conversation/messages", ({ body }) =>
     conversation.send(sendInput.parse(body)),
   );
+  const processes = processSampler(() => s.adapters.codex.processRoots?.() ?? new Map());
+  get("/system/monitor", async () => ({
+    ...await processes(),
+    tasks: monitorTasks(db, agenda.active),
+  }));
   get("/system/status", () => ({
     worker: { lastTick: worker.lastTick, error: worker.error },
     connections: db.all("SELECT * FROM agent_connections"),
