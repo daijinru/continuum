@@ -99,6 +99,8 @@ const workspace = row({ id, path: str, enabled: z.number() }),
     cooldown: z.number(),
     maxMinutes: z.number(),
   });
+const count = z.number().int().nonnegative().nullable();
+const usage = z.object({ input: count, output: count, total: count });
 export const outputs: Record<string, ZodTypeAny> = {
   "GET /conversation": z.array(
     row({
@@ -127,12 +129,12 @@ export const outputs: Record<string, ZodTypeAny> = {
     version: str,
     detail: str,
   }),
-  "GET /settings": cfg,
+  "GET /settings": cfg.extend({ usage: z.object({ conversation: usage, goals: usage, all: usage }) }),
   "PATCH /settings": cfg,
   "POST /workspaces": workspace,
   "PATCH /workspaces/:id": row({ id, enabled: z.boolean() }),
   "GET /goals": z.array(goal),
-  "GET /goals/:id": goal,
+  "GET /goals/:id": goal.extend({ usage }),
   "PATCH /goals/:id": goal,
   "POST /goals": goal,
   "POST /commissions": goal,

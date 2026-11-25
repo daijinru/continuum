@@ -9,6 +9,7 @@ import { Worker } from "../../worker/src/index.ts";
 import { monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, sendInput, timeline } from "./main-conversation.ts";
 import { MainAgenda } from "./main-agenda.ts";
+import { goalUsage, workspaceUsage } from "./usage.ts";
 import {
   goalInput,
   startInput,
@@ -145,6 +146,7 @@ export async function createServer(
   });
   get("/settings", () => ({
     ...s.config(),
+    usage: workspaceUsage(db),
     workspaces: db.all("SELECT * FROM workspaces"),
     connections: db.all("SELECT * FROM agent_connections"),
     worker: worker.lastTick,
@@ -211,6 +213,7 @@ export async function createServer(
   });
   get("/goals/:id", ({ id }) => ({
     ...s.goal(id),
+    usage: goalUsage(db, id),
     arrangement:
       db.one(
         "SELECT mode,cadence,notify,next_at,last_note,succeeded,attempted FROM main_tasks WHERE goal_id=?",

@@ -23,6 +23,7 @@ import {
   type Data,
 } from "./lib.tsx";
 import { Limits } from "./Goals.tsx";
+import { TokenUsage } from "./TokenUsage.tsx";
 import { decisionCopy } from "./decision-copy.ts";
 export function Inbox({ id }: { id?: string }) {
   const { data, error } = useData("/inbox"),
@@ -501,6 +502,13 @@ export function Settings() {
   return (
     <>
       <Head title="工作台设置" sub="管理本机连接、工作目录与运行限制。" />
+      <section className="panel pad">
+        <h2>Token 用量</h2>
+        <TokenUsage label="工作台合计" usage={d.usage.all} />
+        <TokenUsage label="主对话 · 理解消息" usage={d.usage.conversation} />
+        <TokenUsage label="全部委托 · 执行与筛选" usage={d.usage.goals} />
+        <p className="muted">仅统计 Codex 已报告的用量；无记录不代表零消耗。到点提醒和快捷进度查询不调用模型。</p>
+      </section>
       <section className="panel pad">
         <h2>
           <Plug size={20} />

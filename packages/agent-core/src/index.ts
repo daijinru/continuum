@@ -51,6 +51,7 @@ export type Observation = {
   };
 };
 export type Sink = (event: Observation) => void;
+export type TokenCounts = { input: number; output: number; total: number };
 export type Context = {
   id: string;
   workspace: string;
@@ -59,6 +60,7 @@ export type Context = {
   thread?: string;
   turn?: string;
   reference: (thread: string, turn?: string) => void;
+  threadUsage?: (thread: string, counts: TokenCounts) => void;
   emit: Sink;
 };
 export interface AgentAdapter {

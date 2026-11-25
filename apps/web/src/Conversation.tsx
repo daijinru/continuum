@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { api, useData, type Data } from "./lib.tsx";
+import { api, useApp, useData, type Data } from "./lib.tsx";
+import { tokenTotal } from "./TokenUsage.tsx";
 import {
   ArrowUp,
   CornerUpLeft,
@@ -11,6 +12,7 @@ import { Markdown } from "./Markdown.tsx";
 
 export function Conversation({ focus }: { focus?: string }) {
   const { data: settings } = useData<Data>("/settings");
+  const { update } = useApp();
   const [workspace, setWorkspace] = useState("");
   const [messages, setMessages] = useState<Data[]>([]),
     [more, setMore] = useState(false),
@@ -122,6 +124,7 @@ export function Conversation({ focus }: { focus?: string }) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      update();
     }
   };
   return (
@@ -337,6 +340,9 @@ export function Conversation({ focus }: { focus?: string }) {
             >
               问进度
             </button>
+            {settings?.usage && <a href="#settings" aria-label="查看主对话 token 用量明细">
+              主对话用量：{tokenTotal(settings.usage.conversation)}
+            </a>}
             <small role="status">
               {busy ? "正在处理…" : "⌘ K 输入　⌘ ↵ 发送"}
             </small>
