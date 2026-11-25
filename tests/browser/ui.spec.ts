@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { join } from "node:path";
 test("工作台流程、主题、移动端、七个验收截图与控制台", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -7,7 +8,10 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
   });
   const shot = (name: string) =>
     page.screenshot({
-      path: "docs/screenshots/" + name + ".png",
+      path: join(
+        process.env.SCREENSHOT_DIR || "docs/screenshots",
+        name + ".png",
+      ),
       fullPage: true,
     });
   await page.goto("/#today");

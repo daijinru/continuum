@@ -1,6 +1,6 @@
 # Continuum · macOS 交互方向评审
 
-对应 [Issue #3](https://github.com/daijinru/continuum/issues/3)。**待选择**，这里是可离线试用的界面初稿，不是已上线的工作台。打开 `dir-a.html` 后，可在页顶切换三个完整 HTML。每个方向都使用同一组明确标注的示例，不读数据库、不建任务、不发网络请求；只有手动打开来源链接时才离开预览。
+对应 [Issue #3](https://github.com/daijinru/continuum/issues/3)。[已选 A 石墨灰](direction-approved.md)。这里保留可离线试用的界面初稿；正式交互在工作台首页。打开 `dir-a.html` 后，可在页顶切换三个完整 HTML。每个方向都使用同一组明确标注的示例，不读数据库、不建任务、不发网络请求；只有手动打开来源链接时才离开预览。
 
 | 方向 | 首屏/主动作 | 取舍 |
 |---|---|---|

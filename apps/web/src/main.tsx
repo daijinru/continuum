@@ -6,13 +6,11 @@ import {
   Inbox as Tray,
   Activity as Pulse,
   Settings as Gear,
-  Monitor,
-  ChevronRight,
+  MessageCircle,
   Sun,
   Moon,
   PanelLeftClose,
   Menu,
-  Send,
   Infinity as Loop,
 } from "lucide-react";
 import { AppCtx } from "./lib.tsx";
@@ -23,7 +21,7 @@ import { Goal, Goals } from "./Goals.tsx";
 import { Activity, Inbox, Run, Settings } from "./Inspect.tsx";
 import "./style.css";
 const routes = [
-  ["chat", "主对话", Send],
+  ["chat", "主对话", MessageCircle],
   ["today", "今天", PanelTop],
   ["goals", "我的委托", Target],
   ["inbox", "收件箱", Tray],
@@ -36,13 +34,30 @@ function App() {
     [notice, setNotice] = useState(""),
     [live, setLive] = useState(false),
     [menu, setMenu] = useState(false);
-  const [dark, setDark] = useState(
-    localStorage.getItem("continuum-theme") === "dark",
-  );
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem("continuum-theme");
+    return saved
+      ? saved === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("continuum-theme", dark ? "dark" : "light");
   }, [dark]);
+  useEffect(() => {
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => {
+      if (!localStorage.getItem("continuum-theme")) setDark(mq.matches);
+    };
+    mq.addEventListener("change", sync);
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(false);
+    };
+    window.addEventListener("keydown", esc);
+    return () => {
+      mq.removeEventListener("change", sync);
+      window.removeEventListener("keydown", esc);
+    };
+  }, []);
   useEffect(() => {
     const change = () => {
       setRoute(location.hash.slice(1) || "chat");
@@ -94,16 +109,15 @@ function App() {
       }}
     >
       <div className="shell">
-        <aside className={menu ? "open" : ""}>
+        <aside id="navigation" className={menu ? "open" : ""}>
           <a className="brand" href="#chat">
             <span className="symbol">
-              <Loop size={27} strokeWidth={2.4} />
+              <Loop size={22} strokeWidth={2} />
             </span>
             Continuum
           </a>
           <div className="workspace-tag">
-            <Monitor size={16} />
-            <span>本地工作台</span>
+            <span>工作台</span>
           </div>
           <nav>
             {routes
@@ -111,6 +125,7 @@ function App() {
               .map(([key, title, Icon]) => (
                 <a
                   className={section === key ? "active" : ""}
+                  aria-current={section === key ? "page" : undefined}
                   href={"#" + key}
                   key={key}
                 >
@@ -123,15 +138,24 @@ function App() {
             <details className="secondary-nav">
               <summary>更多工具</summary>
               <nav>
-                <a href="#today">
+                <a
+                  href="#today"
+                  aria-current={section === "today" ? "page" : undefined}
+                >
                   <PanelTop size={16} />
                   今天
                 </a>
-                <a href="#inbox">
+                <a
+                  href="#inbox"
+                  aria-current={section === "inbox" ? "page" : undefined}
+                >
                   <Tray size={16} />
                   收件箱
                 </a>
-                <a href="#activity">
+                <a
+                  href="#activity"
+                  aria-current={section === "activity" ? "page" : undefined}
+                >
                   <Pulse size={16} />
                   活动记录
                 </a>
@@ -152,24 +176,47 @@ function App() {
             </div>
           </div>
         </aside>
-        <div className="surface">
+        {menu && (
+          <button
+            className="nav-scrim"
+            onClick={() => setMenu(false)}
+            aria-label="关闭导航"
+          />
+        )}
+        <div className={"surface" + (page === "chat" ? " chat-surface" : "")}>
           <div className="topbar">
             <div>
               <button
                 className="mobile"
                 aria-label="切换导航"
+                aria-expanded={menu}
+                aria-controls="navigation"
                 onClick={() => setMenu(!menu)}
               >
                 {menu ? <PanelLeftClose size={18} /> : <Menu size={18} />}
               </button>
-              <Monitor size={16} />
-              <span>工作台</span>
-              <ChevronRight size={13} />
-              <b>{label}</b>
+              {page === "chat" ? <h1>{label}</h1> : <b>{label}</b>}
             </div>
-            <button aria-label="切换明暗主题" onClick={() => setDark(!dark)}>
-              {dark ? <Sun size={17} /> : <Moon size={17} />}
-            </button>
+            <div>
+              {page === "chat" && (
+                <a className="toolbar-link" href="#today">
+                  <PanelTop size={15} /> 今日简报
+                </a>
+              )}
+              <button
+                aria-label="切换明暗主题"
+                title="切换明暗主题"
+                onClick={() => {
+                  localStorage.setItem(
+                    "continuum-theme",
+                    dark ? "light" : "dark",
+                  );
+                  setDark(!dark);
+                }}
+              >
+                {dark ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
+            </div>
           </div>
           <main key={page}>
             {page === "chat" ? (
