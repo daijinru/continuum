@@ -14,6 +14,7 @@ import {
   Infinity as Loop,
 } from "lucide-react";
 import { AppCtx } from "./lib.tsx";
+import { Monitor } from "./Monitor.tsx";
 import { Today } from "./Feed.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Planner } from "./Planner.tsx";
@@ -26,6 +27,7 @@ const routes = [
   ["goals", "我的委托", Target],
   ["inbox", "收件箱", Tray],
   ["activity", "活动记录", Pulse],
+  ["monitor", "运行监测", Pulse],
   ["settings", "设置", Gear],
 ] as const;
 function App() {
@@ -170,10 +172,10 @@ function App() {
                 设置
               </a>
             </nav>
-            <div className="connection">
+            <a className="connection" href="#monitor" aria-current={section === "monitor" ? "page" : undefined}>
               <span className={"light " + (live ? "on" : "")} />
-              {live ? "本地服务在线" : "正在连接本地服务"}
-            </div>
+              {live ? "本地服务在线" : "正在连接本地服务"} · 运行监测
+            </a>
           </div>
         </aside>
         {menu && (
@@ -231,6 +233,8 @@ function App() {
               <Inbox id={id} />
             ) : page === "activity" ? (
               <Activity />
+            ) : page === "monitor" ? (
+              <Monitor />
             ) : page === "planner" ? (
               <Planner />
             ) : page === "run" ? (

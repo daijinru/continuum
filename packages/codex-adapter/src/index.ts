@@ -92,6 +92,13 @@ function permittedFile(root: string, path: string) {
 }
 export class CodexAdapter implements AgentAdapter {
   sessions = new Map<string, Session>();
+  processRoots() {
+    const roots = new Map<number, string>();
+    for (const [run, { rpc }] of this.sessions) {
+      if (!rpc.closed && rpc.proc.pid) roots.set(rpc.proc.pid, run);
+    }
+    return roots;
+  }
   async start(c: Context) {
     const rpc = new Rpc(
       (p) => this.packet(s, p),

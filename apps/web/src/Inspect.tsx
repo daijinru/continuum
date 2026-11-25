@@ -578,6 +578,7 @@ export function Settings() {
           <CircleCheck size={19} />
           本地服务
         </h2>
+        <a href="#monitor">查看进程占用与委托状态 →</a>
         <dl>
           <dt>调度器</dt>
           <dd>{d.worker ? "运行中 · " + dt(d.worker) : "等待首次检查"}</dd>

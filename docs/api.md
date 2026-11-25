@@ -5,6 +5,7 @@
 | 资源 | 主要操作 |
 | --- | --- |
 | 系统 | GET /health、/system/status、/settings、/agent-connections；POST /agent-connections/check |
+| 运行监测 | GET /system/monitor：`sampledAt`、`processes`（采样失败为 null）、`tasks`；仅在读取时采样，3 秒内复用进程快照。 |
 | 设置 | PATCH /settings；POST /workspaces；PATCH /workspaces/:id |
 | 目标 | GET、POST /goals；GET、PATCH /goals/:id；POST /goals/:id/check |
 | 控制 | POST /goals/:id/start、/pause、/resume、/interrupt；POST /runs/:id/reconcile |
@@ -21,4 +22,3 @@
 列表通常接受 limit 和 offset。活动列表可按 goalId、runId、provider、severity、type、search 过滤。活动不带 cursor 时逆序，带 cursor 时返回该序号以后的事件并升序排列。故事证据支持 until，以便重现历史快照。
 
 实时流的 change 消息使用 SQLite 序号作为 SSE id，data 含事件和目标标识。首次连接可传 cursor，自动重连优先读取 Last-Event-ID。需要完整数据时通过活动和证据接口查询。心跳为 SSE 注释。
-
