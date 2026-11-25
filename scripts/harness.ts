@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { watchFields, watchPr } from "./pr-watch.ts";
 
 const repo = "daijinru/continuum";
 const help = `Continuum 维护工具 · pnpm harness <操作>
@@ -15,7 +16,8 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   commit create [--issue N] "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
   commit push                          推送当前工作分支，返回提交 PR 的下一条命令
-  pr submit [--issue N]                为已推送的工作分支开/复用 PR，lint 通过后合并
+  pr submit [--issue N]                开/复用 PR，申请自动合并并监听至合入或需处理
+  pr watch N                           按 PR 编号接续监听；仅确认已合入 main 时成功
   branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
   branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
 返回 JSON；错误写 stderr，退出码非零。路径相对仓库根目录。`;
@@ -222,6 +224,24 @@ async function main(args: string[]) {
     return { number: i.number, state: updated.state, url: updated.html_url };
   }
   if (area === "pr") {
+    const gh = (...args: string[]) => run("gh", args, root).trim();
+    const view = (ref: string) =>
+      JSON.parse(gh("pr", "view", ref, "-R", repo, "--json", watchFields));
+    const watch = async (ref: string) => {
+      console.error(
+        `监听 ${ref}；中断后可用 pnpm harness pr watch <PR编号> 接续。`,
+      );
+      const result = await watchPr(
+        () => view(ref),
+        (message) => console.error(message),
+      );
+      if (result.outcome !== "merged") process.exitCode = 1;
+      return result;
+    };
+    if (op === "watch") {
+      requireArgs(rest.length === 1 && /^[1-9]\d{0,9}$/.test(rest[0]));
+      return watch(rest[0]);
+    }
     requireArgs(
       op === "submit" &&
         (!rest.length || (rest.length === 2 && rest[0] === "--issue")),
@@ -233,7 +253,6 @@ async function main(args: string[]) {
     const sha = git("rev-parse", "HEAD").trim();
     if (git("ls-remote", "origin", `refs/heads/${b}`).split("\t")[0] !== sha)
       throw Error("远端分支不是当前 HEAD，请先核对并执行 commit push。");
-    const gh = (...args: string[]) => run("gh", args, root).trim();
     const rules = JSON.parse(gh("api", `repos/${repo}/rules/branches/main`));
     if (
       !rules.some(
@@ -259,7 +278,7 @@ async function main(args: string[]) {
         "--state",
         "open",
         "--json",
-        "url,headRepositoryOwner",
+        "url,headRepositoryOwner,autoMergeRequest",
       ),
     ).find(
       (p: any) => p.headRepositoryOwner?.login?.toLowerCase() === "daijinru",
@@ -280,16 +299,19 @@ async function main(args: string[]) {
         "--body",
         n ? `Closes #${n}` : "通过仓库 harness 提交。",
       );
-    gh("pr", "merge", url, "--auto", "--merge", "--match-head-commit", sha);
-    return JSON.parse(
-      gh(
-        "pr",
-        "view",
-        url,
-        "--json",
-        "number,url,state,headRefOid,autoMergeRequest,mergeCommit",
-      ),
-    );
+    if (!found?.autoMergeRequest) {
+      try {
+        gh("pr", "merge", url, "--auto", "--merge", "--match-head-commit", sha);
+      } catch (err) {
+        // A lost write response (or a concurrent merge) is not a reason to write again.
+        const current = view(url);
+        if (current.state !== "MERGED" && !current.autoMergeRequest)
+          throw Error(
+            `${(err as Error).message}\n核对 ${url} 后再决定是否重新提交。`,
+          );
+      }
+    }
+    return watch(url);
   }
   requireArgs(area === "commit");
   if (op === "log") {
@@ -316,7 +338,12 @@ async function main(args: string[]) {
       throw Error("请从工作分支发布；此命令不推送默认分支或游离 HEAD。");
     checkRemote(git("remote", "get-url", "--push", "--all", "origin"));
     const sha = git("rev-parse", "HEAD").trim();
-    const refs = git("log", "-1", "--format=%(trailers:key=Refs,valueonly)", sha).trim();
+    const refs = git(
+      "log",
+      "-1",
+      "--format=%(trailers:key=Refs,valueonly)",
+      sha,
+    ).trim();
     const issue = /^#([1-9]\d{0,9})$/.exec(refs)?.[1];
     git("push", "origin", `${sha}:refs/heads/${b}`);
     return {

@@ -31,8 +31,9 @@ pnpm harness commit show HEAD
 
 ```sh
 pnpm harness commit push
+pnpm harness pr submit --issue 42
 pnpm harness issue comment 42 < delivery.md
-pnpm harness issue close 42
+# 有 Closes #42 的 PR 合入后会自动关单；其他情况确认解决后再关单。
 # 问题复发时：
 pnpm harness issue reopen 42
 ```
@@ -45,7 +46,13 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 仓库启用 GitHub 原生 auto-merge，`main` 的活动规则集要求通过 PR 和 GitHub Actions 的 `lint` 检查（应用 ID `15368`）。GitHub 检出 PR 合并候选、按锁文件安装依赖、运行 `pnpm lint`。新提交触发新检查。harness 只为当前工作分支的 PR 申请自动合并，校验已推送的 HEAD，不使用管理员绕过；普通 PR 只自动验证，不自动申请合并。若分支落后且规则要求同步，请先更新分支再验证。
 
-早期默认只用 lint，不要求回归测试或人工批准。lint 通过仅代表符合静态规则，不等于功能正确。变更涉及迁移、权限或用户流程时，按变更选做针对性验证。用 `gh pr view <编号> --json state,mergeCommit,statusCheckRollup` 区分等待检查与已合并。
+`pr submit` 启用自动合并后保持运行。每 15 秒查询该 PR 当前 HEAD 的状态；检查尚未登记、正在排队或已绿但尚未合并时都会继续等。状态变化写入 stderr；最终回执写入 stdout。只有 GitHub 确认此 PR `MERGED` 到 `main` 且返回 `mergeCommit.oid` 才以 0 退出。本仓库要求的 lint 只代表静态规则通过，仍应按改动验证功能。
+
+**由提交 PR 的开发会话负责修复和接续。** `pnpm harness pr watch N` 可从仓库的任何工作树只读跟进同一 PR；`N` 是 PR 编号，不是 Issue 编号。关闭终端后不在后台运行，恢复会话时重新执行即可。
+
+- `checks_failed`：回执含失败名称、结论及详情链接。打开失败作业，或用 `gh run view <run-id> --log-failed` 看日志。代码问题在原分支修复，验证、提交并 `commit push`；确认为临时基础设施故障才重跑失败作业。接着 `pr watch N` 看最新 HEAD，不重开 PR，也不以旧作业绿灯为准。
+- `behind` / `conflicts`：在原工作分支同步 `origin/main`，按需解决冲突、验证并推送，然后继续监听。`auto_merge_off`：核对原因后，若仍应合并，在原分支重新 `pr submit`。
+- `review`、`draft`、`closed` 或目标分支不符：回执非零退出，核对所需审批或原意。读取暂时失败会退避重试，连续三次失败或状态 30 分钟不变时交回会话诊断；处理后接续，不能据此宣称已合入。
 
 ## 分支清理
 
