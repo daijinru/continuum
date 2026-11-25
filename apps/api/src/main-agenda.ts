@@ -71,7 +71,7 @@ export class MainAgenda {
     const { db } = this.s;
     const due = db.all(
       `SELECT t.*,g.title,g.description,g.constraints_json,g.updated FROM main_tasks t JOIN goals g ON g.id=t.goal_id
-      WHERE g.state='active' AND t.next_at<=? ORDER BY t.next_at`,
+      JOIN workspaces w ON w.id=g.workspace_id WHERE g.state='active' AND (t.mode!='work' OR w.enabled=1) AND t.next_at<=? ORDER BY t.next_at`,
       at.toISOString(),
     );
     for (const t of due) {

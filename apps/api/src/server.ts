@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
@@ -8,7 +10,7 @@ import { Store, Problem, now, uid } from "./db.ts";
 import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
 import { monitorTasks, processSampler } from "./monitor.ts";
-import { MainConversation, sendInput, timeline } from "./main-conversation.ts";
+import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import { goalUsage, workspaceUsage } from "./usage.ts";
 import {
@@ -134,6 +136,9 @@ export async function createServer(
   post("/conversation/messages", ({ body }) =>
     conversation.send(sendInput.parse(body)),
   );
+  post("/conversation/projects/:id", ({ id, body }) =>
+    conversation.resolveProject(id, projectDecision.parse(body)),
+  );
   const processes = processSampler(() => s.adapters.codex.processRoots?.() ?? new Map());
   get("/system/monitor", async () => ({
     ...await processes(),
@@ -168,9 +173,9 @@ export async function createServer(
   });
   get("/settings", () => ({
     ...s.config(),
-    service: { instance, canRestart: !!options.restart },
+    service: { instance, canRestart: !!options.restart, canChooseFolder: process.platform === "darwin" },
     usage: workspaceUsage(db),
-    workspaces: db.all("SELECT * FROM workspaces"),
+    workspaces: db.projects(),
     connections: db.all("SELECT * FROM agent_connections"),
     worker: worker.lastTick,
     db: db.home,
@@ -182,9 +187,21 @@ export async function createServer(
     );
     return s.config();
   });
-  post("/workspaces", ({ body }) =>
-    db.workspace(z.object({ path: line }).strict().parse(body).path),
-  );
+  post("/workspaces/choose-folder", async () => {
+    if (process.platform !== "darwin") throw new Problem("请直接填写项目的绝对路径。");
+    // Selecting a path only fills the form. The user grants access on submit.
+    try {
+      const script = 'try\nreturn POSIX path of (choose folder with prompt "选择 Continuum 项目目录")\non error number -128\nreturn ""\nend try';
+      const { stdout } = await promisify(execFile)("/usr/bin/osascript", ["-e", script], { timeout: 120000 });
+      return { path: stdout.replace(/\r?\n$/, "") };
+    } catch {
+      throw new Problem("无法打开文件夹选择器，请填写项目的绝对路径。");
+    }
+  });
+  post("/workspaces", ({ body }) => {
+    const { path, name } = z.object({ path: line, name: line.max(160).optional() }).strict().parse(body);
+    return db.tx(() => db.workspace(path, name));
+  });
   route("PATCH", "/workspaces/:id", ({ id, body }) => {
     const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(body);
     db.must("SELECT * FROM workspaces WHERE id=?", id);

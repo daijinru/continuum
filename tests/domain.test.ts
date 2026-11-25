@@ -306,6 +306,12 @@ test("定时任务租约、暂停、每日额度、重启幂等与失败退避",
     now(),
   );
   await worker.tick();
+  assert.equal(jobs().attempts, 2);
+  assert.equal(jobs().state, "enabled");
+  const dir = db.must("SELECT path FROM workspaces WHERE id=?", g.workspace_id).path;
+  renameSync(dir, dir + "-moved");
+  db.run("UPDATE workspaces SET enabled=1");
+  await worker.tick();
   assert.equal(jobs().attempts, 3);
   assert.equal(jobs().state, "paused");
 });

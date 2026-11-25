@@ -74,6 +74,7 @@ export class Store {
       "006_managed_commissions.sql",
       "007_main_conversation.sql",
       "008_token_usage.sql",
+      "009_project_authorizations.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =
@@ -118,15 +119,28 @@ export class Store {
       throw e;
     }
   }
-  workspace(path: string) {
+  workspace(path: string, name?: string, authorize = true) {
     const real = directory(path);
     this.run(
-      "INSERT INTO workspaces VALUES(?,?,?,1) ON CONFLICT(path) DO UPDATE SET enabled=1",
+      "INSERT INTO workspaces VALUES(?,?,?,1) ON CONFLICT(path) DO UPDATE SET enabled=1, name=coalesce(?,workspaces.name)",
       uid(),
-      basename(real),
+      name || basename(real),
       real,
+      name || null,
     );
-    return this.must("SELECT * FROM workspaces WHERE path=?", real);
+    const workspace = this.must("SELECT * FROM workspaces WHERE path=?", real);
+    if (authorize)
+      this.run(
+        "INSERT OR IGNORE INTO authorized_projects VALUES(?)",
+        workspace.id,
+      );
+    return workspace;
+  }
+  projects() {
+    return this
+      .all(`SELECT w.*, (SELECT count(*) FROM goals g WHERE g.workspace_id=w.id
+      AND g.state NOT IN ('completed','archived')) affected
+      FROM authorized_projects p JOIN workspaces w ON w.id=p.workspace_id ORDER BY w.name,w.path`);
   }
   allowed(id: string) {
     const w = this.must("SELECT * FROM workspaces WHERE id=?", id);

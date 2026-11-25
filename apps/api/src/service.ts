@@ -100,7 +100,7 @@ export class Service {
       const root = join(realpathSync(this.db.home), "commissions");
       mkdirSync(root, { recursive: true, mode: 0o700 });
       if (realpathSync(root) !== root) throw new Problem("委托目录已改变");
-      workspaceId = this.db.workspace(mkdtempSync(join(root, "task-"))).id;
+      workspaceId = this.db.workspace(mkdtempSync(join(root, "task-")), undefined, false).id;
     }
     const g = this.createGoal({
       title: request.split(/\n/)[0].slice(0, 80),
@@ -624,7 +624,7 @@ export class Service {
     if (this.db.one("SELECT 1 FROM goals")) return;
     const dir = join(this.db.home, "demo-project");
     mkdirSync(dir, { recursive: true });
-    const w = this.db.workspace(dir),
+    const w = this.db.workspace(dir, undefined, false),
       g = this.createGoal({
         title: "开发战棋游戏原型",
         description: "完成可交互的地图、单位移动与寻路验证，准备本地预览。",

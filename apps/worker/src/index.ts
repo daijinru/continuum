@@ -68,7 +68,7 @@ export class Worker {
           await s.adapters[r.provider].interrupt(r.id).catch(() => {});
       }
       for (const msg of db.all(
-        "SELECT m.* FROM user_messages m JOIN goals g ON g.id=m.goal_id WHERE m.status IN('queued','dispatching') AND g.state='active' ORDER BY m.created LIMIT 20",
+        "SELECT m.* FROM user_messages m JOIN goals g ON g.id=m.goal_id JOIN workspaces w ON w.id=g.workspace_id AND w.enabled=1 WHERE m.status IN('queued','dispatching') AND g.state='active' ORDER BY m.created LIMIT 20",
       )) {
         const previous = db.one(
           "SELECT * FROM agent_runs WHERE goal_id=? AND key=?",
@@ -90,10 +90,14 @@ export class Worker {
           )
         )
           continue;
-        db.run(
-          "UPDATE user_messages SET status='dispatching' WHERE id=?",
+        // An earlier dispatch in this batch may have yielded while the user disabled the project.
+        const claimed = db.run(
+          `UPDATE user_messages SET status='dispatching' WHERE id=? AND EXISTS
+           (SELECT 1 FROM goals g JOIN workspaces w ON w.id=g.workspace_id
+             WHERE g.id=user_messages.goal_id AND g.state='active' AND w.enabled=1)`,
           msg.id,
         );
+        if (!claimed.changes) continue;
         const source = msg.source_run
           ? db.one(
               "SELECT id,thread_id FROM agent_runs WHERE id=? AND goal_id=?",
@@ -119,7 +123,7 @@ export class Worker {
         }
       }
       const jobs = db.all(
-        "SELECT j.* FROM schedule_jobs j JOIN goals g ON g.id=j.goal_id WHERE g.state='active' AND j.state='enabled' AND j.next_at<=? AND (j.lease_until IS NULL OR j.lease_until<=?) ORDER BY j.next_at LIMIT 10",
+        "SELECT j.* FROM schedule_jobs j JOIN goals g ON g.id=j.goal_id JOIN workspaces w ON w.id=g.workspace_id AND w.enabled=1 WHERE g.state='active' AND j.state='enabled' AND j.next_at<=? AND (j.lease_until IS NULL OR j.lease_until<=?) ORDER BY j.next_at LIMIT 10",
         stamp,
         stamp,
       );
@@ -146,7 +150,9 @@ export class Worker {
       stamp = now(),
       owner = uid();
     const claimed = db.run(
-      "UPDATE schedule_jobs SET lease=?,lease_until=? WHERE id=? AND state='enabled' AND next_at=? AND (lease_until IS NULL OR lease_until<=?)",
+      `UPDATE schedule_jobs SET lease=?,lease_until=? WHERE id=? AND state='enabled' AND next_at=?
+       AND (lease_until IS NULL OR lease_until<=?) AND EXISTS (SELECT 1 FROM goals g
+         JOIN workspaces w ON w.id=g.workspace_id WHERE g.id=schedule_jobs.goal_id AND g.state='active' AND w.enabled=1)`,
       owner,
       new Date(Date.now() + 120000).toISOString(),
       job.id,
