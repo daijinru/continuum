@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import type { ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { Store, Problem, now, uid } from "./db.ts";
 import { Service } from "./service.ts";
@@ -35,6 +36,7 @@ export async function createServer(
     seed?: boolean;
     delay?: number;
     worker?: boolean;
+    restart?: () => void;
   } = {},
 ) {
   const db = new Store(options.home),
@@ -46,7 +48,9 @@ export async function createServer(
   if (options.seed !== false) s.seed();
   const app = Fastify({ bodyLimit: 32768, logger: false });
   const token = randomBytes(32).toString("hex"),
+    instance = uid(),
     prefix = "/api/v1";
+  let restarting = false, dispatched = false;
   app.addHook("onRequest", async (req, reply) => {
     const host = req.headers.host || "";
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host))
@@ -65,6 +69,8 @@ export async function createServer(
         (req.headers.origin && req.headers.origin !== "http://" + host))
     )
       throw new Problem("本地会话无效，请刷新页面", 403);
+    if (restarting && !["GET", "HEAD"].includes(req.method) && req.url !== prefix + "/system/restart")
+      throw new Problem("工作台正在重启，请稍后再试", 503);
   });
   app.setErrorHandler((err, _req, reply) => {
     const validation = err instanceof z.ZodError;
@@ -105,7 +111,23 @@ export async function createServer(
   const offset = (q: Req["q"]) =>
     z.coerce.number().int().nonnegative().default(0).parse(q.offset);
   get("/session", () => ({ token }));
-  get("/health", () => ({ ready: true }));
+  get("/health", () => ({ ready: !restarting, instance }));
+  post("/system/restart", ({ body }) => {
+    if (!options.restart) throw new Problem("当前启动方式不支持从页面重启", 409);
+    const target = z.object({ instance: z.string().uuid() }).strict().parse(body);
+    if (target.instance !== instance) throw new Problem("服务实例已更换，请刷新页面", 409);
+    restarting = true;
+    return { instance, accepted: true };
+  });
+  // Release the response before ending this instance. Repeated requests for
+  // this generation coalesce; a stale request cannot restart its successor.
+  app.addHook("onResponse", async (req, reply) => {
+    if (restarting && !dispatched && req.routeOptions.url === prefix + "/system/restart" &&
+        req.method === "POST" && reply.statusCode === 200) {
+      dispatched = true;
+      setImmediate(() => options.restart?.());
+    }
+  });
   get("/conversation", ({ q }) =>
     timeline(db, q.before ? offset({ offset: q.before }) : undefined),
   );
@@ -146,6 +168,7 @@ export async function createServer(
   });
   get("/settings", () => ({
     ...s.config(),
+    service: { instance, canRestart: !!options.restart },
     usage: workspaceUsage(db),
     workspaces: db.all("SELECT * FROM workspaces"),
     connections: db.all("SELECT * FROM agent_connections"),
@@ -504,7 +527,13 @@ export async function createServer(
     );
     return db.must("SELECT * FROM user_messages WHERE id=?", id);
   });
+  const streams = new Set<ServerResponse>();
+  app.addHook("preClose", async () => {
+    restarting = true;
+    for (const res of streams) res.end();
+  });
   app.get(prefix + "/stream", (req, reply) => {
+    if (restarting) throw new Problem("工作台正在重启", 503);
     let cursor = offset({
       offset: String(
         req.headers["last-event-id"] || (req.query as any).cursor || 0,
@@ -516,6 +545,7 @@ export async function createServer(
     if (cursor > latest) cursor = 0;
     reply.hijack();
     const res = reply.raw;
+    streams.add(res);
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -525,7 +555,7 @@ export async function createServer(
     res.write(": connected\n\n");
     let blocked = false;
     const flush = () => {
-      if (blocked || res.destroyed) return;
+      if (blocked || res.destroyed || res.writableEnded) return;
       for (;;) {
         const rows = db.all(
           "SELECT seq,id,goal_id,type FROM raw_events WHERE seq>? ORDER BY seq LIMIT 100",
@@ -556,9 +586,10 @@ export async function createServer(
     s.bus.on("event", flush);
     flush();
     const timer = setInterval(() => {
-      if (!blocked) res.write(": heartbeat\n\n");
+      if (!blocked && !res.writableEnded) res.write(": heartbeat\n\n");
     }, 15000);
     res.on("close", () => {
+      streams.delete(res);
       clearInterval(timer);
       s.bus.off("event", flush);
     });

@@ -115,7 +115,8 @@ export const outputs: Record<string, ZodTypeAny> = {
   ),
   "POST /conversation/messages": row({ id }),
   "GET /session": row({ token: str }),
-  "GET /health": row({ ready: z.boolean() }),
+  "GET /health": row({ ready: z.boolean(), instance: id }),
+  "POST /system/restart": z.object({ instance: id, accepted: z.literal(true) }),
   "GET /system/status": row({
     db: str,
     worker: z.object({ lastTick: str.nullable(), error: str.nullable() }),
@@ -129,7 +130,10 @@ export const outputs: Record<string, ZodTypeAny> = {
     version: str,
     detail: str,
   }),
-  "GET /settings": cfg.extend({ usage: z.object({ conversation: usage, goals: usage, all: usage }) }),
+  "GET /settings": cfg.extend({
+    usage: z.object({ conversation: usage, goals: usage, all: usage }),
+    service: z.object({ instance: id, canRestart: z.boolean() }),
+  }),
   "PATCH /settings": cfg,
   "POST /workspaces": workspace,
   "PATCH /workspaces/:id": row({ id, enabled: z.boolean() }),

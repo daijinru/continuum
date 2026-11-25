@@ -6,6 +6,7 @@
 | --- | --- |
 | 系统 | GET /health、/system/status、/settings、/agent-connections；POST /agent-connections/check |
 | 运行监测 | GET /system/monitor：`sampledAt`、`processes`（采样失败为 null）、`tasks`；仅在读取时采样，3 秒内复用进程快照。 |
+| 服务重启 | `GET /settings` 的 `service` 提供 `instance` 和 `canRestart`。同源 `POST /system/restart` 需会话令牌和 `{ "instance": "当前实例 UUID" }`。收到 `accepted` 仅表示已受理；以 `GET /health` 返回不同的 `instance` 且 `ready: true` 为准。 |
 | 设置 | PATCH /settings；POST /workspaces；PATCH /workspaces/:id |
 | 目标 | GET、POST /goals；GET、PATCH /goals/:id；POST /goals/:id/check |
 | 控制 | POST /goals/:id/start、/pause、/resume、/interrupt；POST /runs/:id/reconcile |
