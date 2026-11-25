@@ -24,6 +24,7 @@ import {
 } from "./lib.tsx";
 import { Limits } from "./Goals.tsx";
 import { TokenUsage } from "./TokenUsage.tsx";
+import { RestartService } from "./RestartService.tsx";
 import { decisionCopy } from "./decision-copy.ts";
 export function Inbox({ id }: { id?: string }) {
   const { data, error } = useData("/inbox"),
@@ -591,6 +592,7 @@ export function Settings() {
             <code>{d.db}</code>
           </dd>
         </dl>
+        {d.service && <RestartService instance={d.service.instance} canRestart={d.service.canRestart} />}
       </section>
     </>
   );
