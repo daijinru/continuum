@@ -64,6 +64,7 @@ export type Context = {
   emit: Sink;
 };
 export interface AgentAdapter {
+  processRoots?(): Map<number, string>;
   start(context: Context): Promise<void>;
   respond(
     id: string,
