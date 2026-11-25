@@ -72,6 +72,7 @@ export class Store {
       "004_inbox_kinds.sql",
       "005_message_context.sql",
       "006_managed_commissions.sql",
+      "007_main_conversation.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =

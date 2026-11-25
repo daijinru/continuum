@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { Store, now, uid, Problem, type Row } from "./db.ts";
+import { reportRun, post } from "./main-conversation.ts";
 import {
   type AgentAdapter,
   type Context,
@@ -74,33 +75,48 @@ export class Service {
   commission(request: string, key: string, workspaceId?: string) {
     // Queue the first instruction and create the goal together; a retry of the
     // same submission must not launch another goal or run.
-    return this.db.tx(() => {
-      const prior = this.db.one(
-        "SELECT goal_id,content FROM user_messages WHERE id=?",
-        key,
+    return this.db.tx(() => this.createCommission(request, key, workspaceId));
+  }
+  // Also used in the main-conversation transaction: message + all goals +
+  // dispatch intents commit together, before any provider action starts.
+  createCommission(
+    request: string,
+    key: string,
+    workspaceId?: string,
+    queue = true,
+  ) {
+    const prior = this.db.one(
+      "SELECT goal_id,content FROM user_messages WHERE id=?",
+      key,
+    );
+    if (prior) {
+      if (prior.content !== redact(request))
+        throw new Problem("提交编号已使用", 409);
+      return this.goal(prior.goal_id);
+    }
+    const managed = !workspaceId;
+    if (managed) {
+      const root = join(realpathSync(this.db.home), "commissions");
+      mkdirSync(root, { recursive: true, mode: 0o700 });
+      if (realpathSync(root) !== root) throw new Problem("委托目录已改变");
+      workspaceId = this.db.workspace(mkdtempSync(join(root, "task-"))).id;
+    }
+    const g = this.createGoal({
+      title: request.split(/\n/)[0].slice(0, 80),
+      description: request,
+      criteria: ["按原始要求交付可直接使用的结果"],
+      constraints: [],
+      provider: "codex",
+      priority: 3,
+      workspaceId: workspaceId!,
+    });
+    if (managed)
+      this.db.run(
+        "INSERT INTO managed_commissions(goal_id,workspace_id) VALUES(?,?)",
+        g.id,
+        g.workspace_id,
       );
-      if (prior) {
-        if (prior.content !== redact(request))
-          throw new Problem("提交编号已使用", 409);
-        return this.goal(prior.goal_id);
-      }
-      const managed = !workspaceId;
-      if (managed) {
-        const root = join(realpathSync(this.db.home), "commissions");
-        mkdirSync(root, { recursive: true, mode: 0o700 });
-        if (realpathSync(root) !== root) throw new Problem("委托目录已改变");
-        workspaceId = this.db.workspace(mkdtempSync(join(root, "task-"))).id;
-      }
-      const g = this.createGoal({
-        title: request.split(/\n/)[0].slice(0, 80),
-        description: request,
-        criteria: ["按原始要求交付可直接使用的结果"],
-        constraints: [],
-        provider: "codex",
-        priority: 3,
-        workspaceId: workspaceId!,
-      });
-      if (managed) this.db.run("INSERT INTO managed_commissions(goal_id,workspace_id) VALUES(?,?)",g.id,g.workspace_id);
+    if (queue)
       this.db.run(
         "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status) VALUES(?,?,'goal',?,?,?,'queued')",
         key,
@@ -109,8 +125,7 @@ export class Service {
         redact(request),
         now(),
       );
-      return g;
-    });
+    return g;
   }
   context(run: Row): Context {
     const goal = this.goal(run.goal_id);
@@ -118,7 +133,11 @@ export class Service {
     return {
       id: run.id,
       workspace,
-      managedCommission: !!this.db.one("SELECT 1 FROM managed_commissions WHERE goal_id=? AND workspace_id=?",goal.id,goal.workspace_id),
+      managedCommission: !!this.db.one(
+        "SELECT 1 FROM managed_commissions WHERE goal_id=? AND workspace_id=?",
+        goal.id,
+        goal.workspace_id,
+      ),
       instruction: run.instruction,
       thread: run.thread_id,
       turn: run.turn_id,
@@ -148,6 +167,13 @@ export class Service {
   }
   reserve(goal: Row, key: string, instruction: string, thread: string | null) {
     const db = this.db;
+    if (
+      db.one(
+        "SELECT 1 FROM main_tasks WHERE goal_id=? AND mode!='work'",
+        goal.id,
+      )
+    )
+      throw new Problem("该委托由工作台直接处理，不启动 Codex。");
     db.allowed(goal.workspace_id);
     if (goal.state !== "active") throw new Problem("请先将目标恢复为进行中");
     if (
@@ -172,6 +198,7 @@ export class Service {
       stamp,
     );
     this.move(this.run(id), "starting");
+    db.run("INSERT INTO main_run_scope VALUES(?,?)", id, goal.constraints_json);
     return this.run(id);
   }
   async start(
@@ -356,6 +383,24 @@ export class Service {
       db.run("UPDATE goals SET updated=? WHERE id=?", stamp, r.goal_id);
       db.run("UPDATE agent_runs SET heartbeat=? WHERE id=?", stamp, id);
       projectStory(db, r, event, e);
+      if (!r.finished && target && this.run(id).finished)
+        reportRun(db, r, target, e.title);
+      if (e.approval && !r.finished && r.status !== "unknown") {
+        const item = db.one(
+          "SELECT id FROM inbox_items WHERE run_id=? AND request_id=?",
+          id,
+          e.approval.id,
+        );
+        if (item)
+          post(
+            db,
+            "assistant",
+            "question",
+            `${e.title}\n\n${e.approval.reason}`,
+            [r.goal_id],
+            "inbox:" + item.id,
+          );
+      }
       return event;
     });
     if (result) {

@@ -1001,3 +1001,9 @@ dialog::backdrop {
 .delivery { min-width: 0; margin-block: 10px; }
 .delivery .links { margin-top: 12px; }
 .delivery details > summary { cursor: pointer; color: var(--accent); }
+.conversation {max-width:56rem; margin:auto;display:grid;gap:14px;}
+.chat-message {min-width:0;border:1px solid var(--line);background:var(--paper);border-radius:12px;padding:14px 18px;}
+.chat-message.user {margin-inline-start:10%;background:var(--soft);}
+.chat-message .links {flex-wrap:wrap;margin-top:.65rem;}
+.main-composer {position:sticky;bottom:0;background:var(--paper);z-index:1;}
+.main-composer textarea {width:100%;}
