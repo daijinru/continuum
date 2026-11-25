@@ -135,3 +135,66 @@ console.log(JSON.stringify({number:42,html_url:"https://github.com/daijinru/cont
     "-",
   ]);
 });
+
+test("本地清理只删已合并、远端已删、PR 尖端一致且无 worktree 的分支", (t) => {
+  const { git, dir, exec } = fixture(t);
+  git("commit", "--allow-empty", "-qm", "base");
+  const sha = git("rev-parse", "HEAD").trim();
+  git("update-ref", "refs/remotes/origin/main", sha);
+  for (const b of [
+    "merged",
+    "changed",
+    "remote-exists",
+    "checked-out",
+    "master",
+    "unpublished",
+    "ahead",
+  ])
+    git("branch", b);
+  git("switch", "-q", "ahead");
+  git("commit", "--allow-empty", "-qm", "not merged");
+  git("switch", "-q", "main");
+  const wt = mkdtempSync(join(tmpdir(), "continuum-occupied-"));
+  t.after(() => rmSync(wt, { recursive: true, force: true }));
+  git("worktree", "add", wt, "checked-out");
+  const helper = new URL("../scripts/merged-branches.mjs", import.meta.url)
+    .href;
+  const source = `import {cleanLocal} from ${JSON.stringify(helper)};
+    import {execFileSync} from 'node:child_process';
+    const git=(...args)=>args[0]==='ls-remote'?'${sha}\\trefs/heads/remote-exists':execFileSync('git',args,{encoding:'utf8'}).trimEnd();
+    const prs=name=>name==='unpublished'?[]:[{headRefName:name,headRefOid:name==='changed'?'other':'${sha}',isCrossRepository:false,baseRefName:'main',state:'MERGED'}];
+    console.log(JSON.stringify(cleanLocal(git,prs,'main',process.argv[1]==='preview')));`;
+  for (const mode of ["preview", "apply"]) {
+    const r = exec(process.execPath, [
+      "--input-type=module",
+      "-e",
+      source,
+      mode,
+    ]);
+    assert.equal(r.status, 0, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.deepEqual(mode === "preview" ? result.eligible : result.deleted, [
+      "merged",
+    ]);
+    assert.equal(existsRef("merged"), mode === "preview");
+    for (const b of [
+      "changed",
+      "remote-exists",
+      "checked-out",
+      "master",
+      "unpublished",
+      "ahead",
+      "main",
+    ])
+      assert.ok(existsRef(b), b);
+  }
+  function existsRef(name: string) {
+    return (
+      spawnSync(
+        "git",
+        ["show-ref", "--verify", "--quiet", "refs/heads/" + name],
+        { cwd: dir },
+      ).status === 0
+    );
+  }
+});

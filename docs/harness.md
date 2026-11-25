@@ -46,3 +46,19 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 仓库启用 GitHub 原生 auto-merge，`main` 的活动规则集要求通过 PR 和 GitHub Actions 的 `lint` 检查（应用 ID `15368`）。GitHub 检出 PR 合并候选、按锁文件安装依赖、运行 `pnpm lint`。新提交触发新检查。harness 只为当前工作分支的 PR 申请自动合并，校验已推送的 HEAD，不使用管理员绕过；普通 PR 只自动验证，不自动申请合并。若分支落后且规则要求同步，请先更新分支再验证。
 
 早期默认只用 lint，不要求回归测试或人工批准。lint 通过仅代表符合静态规则，不等于功能正确。变更涉及迁移、权限或用户流程时，按变更选做针对性验证。用 `gh pr view <编号> --json state,mergeCommit,statusCheckRollup` 区分等待检查与已合并。
+
+## 分支清理
+
+GitHub 仓库设置 **Automatically delete head branches** 已开启。合并 PR 后由 GitHub 删除同仓源分支（受保护分支仍受规则限制）。这个设置不会删除开发者机器上的 `refs/heads/*`。本仓库默认分支是 `main`。
+
+```sh
+pnpm harness branch auto on          # 本机 macOS、此检出安装/更新一次
+pnpm harness branch auto status
+pnpm harness branch cleanup --dry-run
+pnpm harness branch cleanup         # 立即执行；其他系统也可以定时运行
+pnpm harness branch auto off
+```
+
+本地任务使用用户级 LaunchAgent，登录后及每 5 分钟检查；依赖已登录的 `gh`、Git 和 Node。若有待核对的闲置工作分支，先 `fetch --prune`，再核对 GitHub 上已合并到默认分支的同仓 PR。**只有远端同名分支已消失、PR head 等于本地尖端、该提交是远端默认分支的祖先时，才尝试 `git branch -d`**。该策略匹配 harness 的普通 merge；不能证明等价的 squash/rebase 不自动清理。网络失败就留待下轮。
+
+后台不切换任何工作树。PR 合并后，在原工作树自行 `git switch main`、`git pull --ff-only`；不再有 worktree 占用的分支会在下一轮清理。`main`/`master`、含未合入提交的分支、当前及其他工作树正在使用的分支均保留。安装时把清理程序复制到此仓库 Git 公共目录，切换分支不影响定时任务；脚本升级或仓库移动后重新安装。
