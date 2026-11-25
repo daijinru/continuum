@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Markdown } from "./Markdown.tsx";
 import { arrangeBriefing } from "./briefing-order.ts";
 import { decisionCopy } from "./decision-copy.ts";
-import { Delivery, NewCommission } from "./Commission.tsx";
+import { Delivery } from "./Commission.tsx";
 import {
   CheckCheck,
   TriangleAlert,
@@ -129,7 +129,6 @@ export function Story({
 export function Today() {
   const [win, setWin] = useState("since"),
     [snapshot, setSnapshot] = useState(""),
-    [creating, setCreating] = useState(false),
     { notice } = useApp();
   const { data: b, error } = useLoad<Data>(
     "brief/" + win + "/" + snapshot,
@@ -142,12 +141,17 @@ export function Today() {
   const ordered = b && arrangeBriefing(b.sections);
   const reportRuns = new Set((b?.reports || []).map((r: Data) => r.run_id));
   const results = [
+    ...(b?.native || []).map((m: Data) => ({ ...m, native: true })),
     ...(b?.reports || []).map((r: Data) => ({ ...r, delivery: true })),
     ...(ordered?.highlights || []).filter(
       (s) =>
         !reportRuns.has(s.run_id) && (!b?.reports || s.category === "outcome"),
     ),
-  ].sort((a, b) => b.last_seq - a.last_seq);
+  ].sort(
+    (a, b) =>
+      b.updated.localeCompare(a.updated) ||
+      (b.last_seq || b.seq) - (a.last_seq || a.seq),
+  );
   const date = new Date();
   const labels: Record<string, string> = {
     since: "上次阅读以来",
@@ -165,11 +169,10 @@ export function Today() {
           weekday: "long",
         })}
       >
-        <button className="primary" onClick={() => setCreating(true)}>
+        <button className="primary" onClick={() => (location.hash = "chat")}>
           交代一件事
         </button>
       </Head>
-      {creating && <NewCommission close={() => setCreating(false)} />}
       <div className="toolbar">
         <div className="tabs">
           {Object.entries(labels).map(([k, t]) => (
@@ -277,7 +280,14 @@ export function Today() {
                   </div>
                   <div className="panel">
                     {rows.map((s: Data) =>
-                      s.delivery ? (
+                      s.native ? (
+                        <article key={s.id} className="panel pad">
+                          <h3>{s.goal}</h3>
+                          <time>{dt(s.updated)}</time>
+                          <Markdown text={s.summary} />
+                          <a href={"#chat/" + s.goal_id}>在主对话中继续</a>
+                        </article>
+                      ) : s.delivery ? (
                         <Delivery key={s.id} r={s} />
                       ) : (
                         <Story key={s.id} s={s} until={b.end_seq} digest />

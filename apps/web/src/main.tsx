@@ -15,85 +15,24 @@ import {
   Send,
   Infinity as Loop,
 } from "lucide-react";
-import {
-  api,
-  AppCtx,
-  Form,
-  field,
-  Modal,
-  useData,
-  type Scope,
-} from "./lib.tsx";
+import { AppCtx } from "./lib.tsx";
 import { Today } from "./Feed.tsx";
+import { Conversation } from "./Conversation.tsx";
 import { Planner } from "./Planner.tsx";
 import { Goal, Goals } from "./Goals.tsx";
 import { Activity, Inbox, Run, Settings } from "./Inspect.tsx";
 import "./style.css";
 const routes = [
+  ["chat", "主对话", Send],
   ["today", "今天", PanelTop],
   ["goals", "我的委托", Target],
   ["inbox", "收件箱", Tray],
   ["activity", "活动记录", Pulse],
   ["settings", "设置", Gear],
 ] as const;
-function Composer({ scope, close }: { scope: Scope; close: () => void }) {
-  const { data } = useData("/goals");
-  return (
-    <Modal title="发送跟进指令" close={close}>
-      <div className="scope">上下文 · {scope.title}</div>
-      <Form
-        onSubmit={async (f) => {
-          const goalId = scope.goalId || field(f, "goalId");
-          await api("/chat/messages", {
-            scope: scope.kind,
-            ref: scope.ref,
-            goalId,
-            content: field(f, "content"),
-          });
-          close();
-          location.hash = "goal/" + goalId;
-        }}
-      >
-        {!scope.goalId && (
-          <label>
-            发送到目标
-            <select required name="goalId" defaultValue="">
-              <option value="" disabled>
-                选择接收指令的目标
-              </option>
-              {data?.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label>
-          跟进指令
-          <textarea
-            autoFocus
-            required
-            name="content"
-            rows={5}
-            placeholder="希望下一轮执行什么？"
-          />
-        </label>
-        <p className="muted">
-          指令会保存在目标历史中，并在当前运行结束后执行。
-        </p>
-        <button className="primary">
-          <Send size={15} />
-          发送指令
-        </button>
-      </Form>
-    </Modal>
-  );
-}
 function App() {
-  const [route, setRoute] = useState(location.hash.slice(1) || "today"),
+  const [route, setRoute] = useState(location.hash.slice(1) || "chat"),
     [revision, setRev] = useState(0),
-    [scope, setScope] = useState<Scope | null>(null),
     [notice, setNotice] = useState(""),
     [live, setLive] = useState(false),
     [menu, setMenu] = useState(false);
@@ -106,7 +45,7 @@ function App() {
   }, [dark]);
   useEffect(() => {
     const change = () => {
-      setRoute(location.hash.slice(1) || "today");
+      setRoute(location.hash.slice(1) || "chat");
       setMenu(false);
       window.scrollTo(0, 0);
     };
@@ -149,12 +88,14 @@ function App() {
         revision,
         update: () => setRev((v) => v + 1),
         notice: setNotice,
-        chat: setScope,
+        chat: (s) => {
+          location.hash = s.goalId ? "chat/" + s.goalId : "chat";
+        },
       }}
     >
       <div className="shell">
         <aside className={menu ? "open" : ""}>
-          <a className="brand" href="#today">
+          <a className="brand" href="#chat">
             <span className="symbol">
               <Loop size={27} strokeWidth={2.4} />
             </span>
@@ -166,7 +107,7 @@ function App() {
           </div>
           <nav>
             {routes
-              .filter(([key]) => key === "today" || key === "goals")
+              .filter(([key]) => key === "chat" || key === "goals")
               .map(([key, title, Icon]) => (
                 <a
                   className={section === key ? "active" : ""}
@@ -182,6 +123,10 @@ function App() {
             <details className="secondary-nav">
               <summary>更多工具</summary>
               <nav>
+                <a href="#today">
+                  <PanelTop size={16} />
+                  今天
+                </a>
                 <a href="#inbox">
                   <Tray size={16} />
                   收件箱
@@ -227,7 +172,9 @@ function App() {
             </button>
           </div>
           <main key={page}>
-            {page === "today" ? (
+            {page === "chat" ? (
+              <Conversation focus={id} />
+            ) : page === "today" ? (
               <Today />
             ) : page === "goals" ? (
               <Goals />
@@ -249,7 +196,6 @@ function App() {
           </main>
         </div>
       </div>
-      {scope && <Composer scope={scope} close={() => setScope(null)} />}{" "}
       {notice && (
         <div role="status" className="toast">
           {notice}

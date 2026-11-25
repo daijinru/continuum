@@ -26,7 +26,8 @@ import {
   type Data,
 } from "./lib.tsx";
 import { Story } from "./Feed.tsx";
-import { Delivery, NewCommission, Preference } from "./Commission.tsx";
+import { Markdown } from "./Markdown.tsx";
+import { Delivery, Preference } from "./Commission.tsx";
 function GoalForm({ close }: { close: () => void }) {
   const { data, error } = useData<Data>("/settings");
   const [path, setPath] = useState(false);
@@ -124,8 +125,7 @@ function GoalForm({ close }: { close: () => void }) {
 }
 export function Goals() {
   const { data, error } = useData("/goals"),
-    [creating, set] = useState(false),
-    [simple, setSimple] = useState(false);
+    [creating, set] = useState(false);
   return (
     <>
       <Head
@@ -133,7 +133,7 @@ export function Goals() {
         sub="查看你交代的事、最近的结果，或调整下一次的要求。"
       >
         <button onClick={() => set(true)}>高级创建</button>
-        <button className="primary" onClick={() => setSimple(true)}>
+        <button className="primary" onClick={() => (location.hash = "chat")}>
           <Plus size={16} />
           交代一件事
         </button>
@@ -183,7 +183,6 @@ export function Goals() {
         ))
       )}
       {creating && <GoalForm close={() => set(false)} />}
-      {simple && <NewCommission close={() => setSimple(false)} />}
     </>
   );
 }
@@ -237,10 +236,28 @@ export function Goal({ id }: { id: string }) {
         </select>
       </Head>
       <div className="goal-controls">
+        {g.arrangement && (
+          <p>
+            {g.arrangement.mode === "reminder"
+              ? "到点提醒"
+              : g.arrangement.notify === "changes"
+                ? "有新发现再报告"
+                : "按约定交付"}{" "}
+            ·{" "}
+            {g.arrangement.next_at
+              ? `原定 ${dt(g.arrangement.next_at)}`
+              : "没有待触发的排期"}{" "}
+            {g.arrangement.last_note}
+          </p>
+        )}
         <button onClick={() => setPref(true)}>调整委托要求</button>
         <Action
           className="primary"
-          disabled={!!live || !isActive}
+          disabled={
+            !!live ||
+            !isActive ||
+            (g.arrangement && g.arrangement.mode !== "work")
+          }
           run={() => start(false)}
         >
           <Play size={15} />
@@ -276,21 +293,31 @@ export function Goal({ id }: { id: string }) {
       </div>
       {pref && <Preference goalId={id} close={() => setPref(false)} />}
       <div className="tabs line">
-        {["概况", "运行记录", "计划任务", "指令历史"].map((t) => (
-          <button
-            key={t}
-            className={tab === t ? "selected" : ""}
-            onClick={() => setTab(t)}
-          >
-            {t}
-          </button>
-        ))}
+        {["概况", "运行记录", "计划任务", "指令历史"]
+          .filter((t) => !(t === "计划任务" && g.arrangement))
+          .map((t) => (
+            <button
+              key={t}
+              className={tab === t ? "selected" : ""}
+              onClick={() => setTab(t)}
+            >
+              {t}
+            </button>
+          ))}
       </div>
       {tab === "概况" && (
         <>
           <section>
             <h2>历次交付</h2>
-            {!reports.data ? (
+            {g.nativeResults?.length ? (
+              g.nativeResults.map((r: Data) => (
+                <article className="panel pad" key={r.id}>
+                  <time>{dt(r.created)}</time>
+                  <Markdown text={r.body} />
+                  <a href={"#chat/" + id}>在主对话中继续</a>
+                </article>
+              ))
+            ) : !reports.data ? (
               <Status error={reports.error} />
             ) : reports.data.length ? (
               reports.data.map((r) => <Delivery key={r.id} r={r} />)

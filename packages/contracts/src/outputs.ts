@@ -99,6 +99,18 @@ const workspace = row({ id, path: str, enabled: z.number() }),
     maxMinutes: z.number(),
   });
 export const outputs: Record<string, ZodTypeAny> = {
+  "GET /conversation": z.array(
+    row({
+      id,
+      seq: z.number().int(),
+      role: z.enum(["user", "assistant"]),
+      kind: str,
+      body: str,
+      created: str,
+      refs: z.array(row({ id, title: str })),
+    }),
+  ),
+  "POST /conversation/messages": row({ id }),
   "GET /session": row({ token: str }),
   "GET /health": row({ ready: z.boolean() }),
   "GET /system/status": row({
