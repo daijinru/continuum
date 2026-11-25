@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { Store, now, uid, Problem, type Row } from "./db.ts";
+import { recordUsage } from "./usage.ts";
 import { reportRun, post } from "./main-conversation.ts";
 import {
   type AgentAdapter,
@@ -141,6 +142,9 @@ export class Service {
       instruction: run.instruction,
       thread: run.thread_id,
       turn: run.turn_id,
+      threadUsage: (thread, counts) => {
+        if (!this.closed) recordUsage(this.db, "thread:" + thread, goal.id, counts);
+      },
       reference: (thread, turn) => {
         if (!this.closed)
           this.db.run(

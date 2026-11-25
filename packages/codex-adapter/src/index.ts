@@ -10,6 +10,7 @@ import {
   type RunStatus,
 } from "../../agent-core/src/index.ts";
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
+import type { ThreadTokenUsageUpdatedNotification } from "../generated/v2/ThreadTokenUsageUpdatedNotification.ts";
 import type { ToolRequestUserInputParams } from "../generated/v2/ToolRequestUserInputParams.ts";
 import type { ToolRequestUserInputResponse } from "../generated/v2/ToolRequestUserInputResponse.ts";
 import type { ThreadReadResponse } from "../generated/v2/ThreadReadResponse.ts";
@@ -294,6 +295,13 @@ export class CodexAdapter implements AgentAdapter {
             error: { code: -32601, message: "Unsupported capability" },
           })
           .catch(() => s.rpc.close());
+      return;
+    }
+    if (method === "thread/tokenUsage/updated") {
+      const { tokenUsage, turnId } = a as ThreadTokenUsageUpdatedNotification;
+      const u = tokenUsage?.total;
+      if (u && s.turn && turnId === s.turn)
+        c.threadUsage?.(s.thread, { input: u.inputTokens, output: u.outputTokens, total: u.totalTokens });
       return;
     }
     if (method === "serverRequest/resolved") {

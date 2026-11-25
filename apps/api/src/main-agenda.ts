@@ -1,4 +1,5 @@
 import { load } from "cheerio";
+import { execMeter } from "./usage.ts";
 import type { Service } from "./service.ts";
 import { uid, now, type Row } from "./db.ts";
 import { chooseRepos, type Repo } from "./main-model.ts";
@@ -216,6 +217,7 @@ export class MainAgenda {
         ? await this.choose(
             t.description + "\n" + JSON.parse(t.constraints_json).join("\n"),
             candidates,
+            execMeter(db, t.goal_id),
           )
         : [];
       if (!this.current(t)) return;

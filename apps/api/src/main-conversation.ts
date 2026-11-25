@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { execMeter } from "./usage.ts";
 import { now, uid, Problem, type Row, type Store } from "./db.ts";
 import type { Service } from "./service.ts";
 import { interpret, type Intent, type Interpret } from "./main-model.ts";
@@ -301,7 +302,7 @@ export class MainConversation {
           time: m.created,
         })),
         localTime: instant.toString(),
-      });
+      }, execMeter(db, null));
     // A clarifying question supersedes proposed side effects. All parts of a
     // compound instruction commit together or none do.
     const clarify = actions.find((a) => a.type === "clarify");
