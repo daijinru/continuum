@@ -136,6 +136,53 @@ console.log(JSON.stringify({number:42,html_url:"https://github.com/daijinru/cont
   ]);
 });
 
+test("按 PR 编号接续：失败非零退出并定位作业；修复后仅实际合并回执成功", (t) => {
+  const { file, dir, harness } = fixture(t);
+  file(
+    "gh",
+    `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.slice(0,6).join(" ") !== "pr view 42 -R daijinru/continuum --json") process.exit(3);
+process.stdout.write(require("node:fs").readFileSync("remote.json"));
+`,
+  );
+  chmodSync(join(dir, "gh"), 0o700);
+  const job = "https://github.com/daijinru/continuum/actions/runs/123/job/456";
+  const pr = {
+    number: 42,
+    baseRefName: "main",
+    isCrossRepository: false,
+    state: "OPEN",
+    headRefOid: "a".repeat(40),
+    autoMergeRequest: {},
+    mergeStateStatus: "BLOCKED",
+    statusCheckRollup: [
+      { name: "lint", conclusion: "FAILURE", detailsUrl: job },
+    ],
+  };
+  file("remote.json", JSON.stringify(pr));
+  const failed = harness("pr", "watch", "42");
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.deepEqual(JSON.parse(failed.stdout).failures, [
+    { name: "lint", result: "FAILURE", url: job },
+  ]);
+  file(
+    "remote.json",
+    JSON.stringify({
+      ...pr,
+      state: "MERGED",
+      headRefOid: "b".repeat(40),
+      mergeCommit: { oid: "d".repeat(40) },
+      autoMergeRequest: null,
+      statusCheckRollup: [],
+    }),
+  );
+  const fixed = harness("pr", "watch", "42");
+  assert.equal(fixed.status, 0, fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).outcome, "merged");
+  assert.equal(JSON.parse(fixed.stdout).headRefOid, "b".repeat(40));
+});
+
 test("本地清理只删已合并、远端已删、PR 尖端一致且无 worktree 的分支", (t) => {
   const { git, dir, exec } = fixture(t);
   git("commit", "--allow-empty", "-qm", "base");
