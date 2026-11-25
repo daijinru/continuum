@@ -13,10 +13,10 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   issue close N | issue reopen N       更新 Issue 状态
   commit log [--issue N]               当前分支最近 30 条匹配提交
   commit show HEAD|SHA                 单次提交及文件统计
-  commit create [--issue N] "说明" -- 路径...
+  commit create --issue N "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
   commit push                          推送当前工作分支，返回提交 PR 的下一条命令
-  pr submit [--issue N]                开/复用 PR，申请自动合并并监听至合入或需处理
+  pr submit --issue N                开/复用 PR，申请自动合并并监听至合入或需处理
   pr watch N                           按 PR 编号接续监听；仅确认已合入 main 时成功
   branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
   branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
@@ -39,6 +39,13 @@ function run(tool: string, args: string[], cwd: string, input?: string) {
 function number(s?: string) {
   if (!s || !/^[1-9]\d{0,9}$/.test(s)) throw Error("需要正整数 Issue 编号");
   return s;
+}
+function requiredIssue(args: string[]) {
+  if (args[0] !== "--issue" || !args[1])
+    throw Error(
+      "缺少 --issue N。请先查找同题 Issue，没有就通过 harness issue create 建单。",
+    );
+  return number(args[1]);
 }
 function requireArgs(ok: unknown): asserts ok {
   if (!ok) throw Error(`参数有误。\n${help}`);
@@ -96,6 +103,8 @@ async function get(path: string) {
 async function issue(n: string) {
   const i = await get("/issues/" + n);
   if (i.pull_request) throw Error(`#${n} 是 PR，不是 Issue。`);
+  if (i.html_url !== `https://github.com/${repo}/issues/${n}`)
+    throw Error(`#${n} 的返回地址与本仓库 Issue 不一致，请核对编号。`);
   return i;
 }
 async function main(args: string[]) {
@@ -124,6 +133,23 @@ async function main(args: string[]) {
       .split("\0")
       .filter(Boolean);
   const branch = () => git("branch", "--show-current").trim();
+  const commitIssue = (sha: string) => {
+    // A sync merge can sit above the last task commit on the working branch.
+    const refs = git(
+      "log",
+      "-1",
+      "--first-parent",
+      "--no-merges",
+      "--format=%(trailers:key=Refs,valueonly)",
+      sha,
+    ).trim();
+    const match = /^#([1-9]\d{0,9})$/.exec(refs);
+    if (!match)
+      throw Error(
+        "工作分支最近的任务提交须包含唯一的 Refs: #N 尾注，请核对提交和 Issue。",
+      );
+    return match[1];
+  };
   const log = (n?: string) =>
     git(
       "log",
@@ -242,15 +268,16 @@ async function main(args: string[]) {
       requireArgs(rest.length === 1 && /^[1-9]\d{0,9}$/.test(rest[0]));
       return watch(rest[0]);
     }
-    requireArgs(
-      op === "submit" &&
-        (!rest.length || (rest.length === 2 && rest[0] === "--issue")),
-    );
-    const n = rest.length ? number(rest[1]) : undefined;
+    requireArgs(op === "submit");
+    const n = requiredIssue(rest);
+    requireArgs(rest.length === 2);
     const b = branch();
     if (!b || ["main", "master"].includes(b))
       throw Error("请在已推送的工作分支上提交 PR。");
     const sha = git("rev-parse", "HEAD").trim();
+    if (n !== commitIssue(sha))
+      throw Error("--issue 与工作分支的 Refs: #N 不一致。");
+    const target = await issue(n);
     if (git("ls-remote", "origin", `refs/heads/${b}`).split("\t")[0] !== sha)
       throw Error("远端分支不是当前 HEAD，请先核对并执行 commit push。");
     const rules = JSON.parse(gh("api", `repos/${repo}/rules/branches/main`));
@@ -264,7 +291,6 @@ async function main(args: string[]) {
       )
     )
       throw Error("main 缺少必需的 GitHub Actions lint 规则，不开启自动合并。");
-    if (n) await issue(n);
     const found = JSON.parse(
       gh(
         "pr",
@@ -297,8 +323,60 @@ async function main(args: string[]) {
         "--title",
         git("log", "-1", "--format=%s").trim(),
         "--body",
-        n ? `Closes #${n}` : "通过仓库 harness 提交。",
+        `Closes #${n}`,
       );
+    const readLink = () =>
+      JSON.parse(
+        gh(
+          "pr",
+          "view",
+          url,
+          "-R",
+          repo,
+          "--json",
+          "number,body,closingIssuesReferences",
+        ),
+      );
+    const linked = (pr: { closingIssuesReferences: { url: string }[] }) =>
+      pr.closingIssuesReferences.some((ref) => ref.url === target.html_url);
+    let pr = readLink();
+    if (!linked(pr) && found) {
+      if (pr.closingIssuesReferences.length)
+        throw Error(
+          `已有 PR 关联了其他 Issue。请核对 ${url}，确认应同时关联 #${n} 后再提交。`,
+        );
+      // Preserve the description. Skip a second append after a lost write or a
+      // delay in GitHub's link index, but always verify the actual relation.
+      if (
+        !pr.body
+          .split(/\r?\n/)
+          .some((line: string) => line.trim() === `Closes #${n}`)
+      ) {
+        const body = pr.body + (pr.body ? "\n\n" : "") + `Closes #${n}`;
+        try {
+          run(
+            "gh",
+            [
+              "api",
+              "--hostname",
+              "github.com",
+              "--method",
+              "PATCH",
+              `repos/${repo}/pulls/${pr.number}`,
+              "--input",
+              "-",
+            ],
+            root,
+            JSON.stringify({ body }),
+          );
+        } catch (err) {
+          if (!linked(readLink())) throw err;
+        }
+      }
+      pr = readLink();
+    }
+    if (!linked(pr))
+      throw Error(`GitHub 尚未确认 ${url} 关联 Issue #${n}。请回查后再提交。`);
     if (!found?.autoMergeRequest) {
       try {
         gh("pr", "merge", url, "--auto", "--merge", "--match-head-commit", sha);
@@ -338,28 +416,20 @@ async function main(args: string[]) {
       throw Error("请从工作分支发布；此命令不推送默认分支或游离 HEAD。");
     checkRemote(git("remote", "get-url", "--push", "--all", "origin"));
     const sha = git("rev-parse", "HEAD").trim();
-    const refs = git(
-      "log",
-      "-1",
-      "--format=%(trailers:key=Refs,valueonly)",
-      sha,
-    ).trim();
-    const issue = /^#([1-9]\d{0,9})$/.exec(refs)?.[1];
+    const n = commitIssue(sha);
+    await issue(n);
     git("push", "origin", `${sha}:refs/heads/${b}`);
     return {
       branch: b,
       sha,
       url: `https://github.com/${repo}/commit/${sha}`,
-      next: "pnpm harness pr submit" + (issue ? ` --issue ${issue}` : ""),
+      issue: Number(n),
+      next: `pnpm harness pr submit --issue ${n}`,
     };
   }
   requireArgs(op === "create");
-  let n: string | undefined;
-  if (rest[0] === "--issue") {
-    n = number(rest[1]);
-    rest.splice(0, 2);
-  }
-  const [title, sep, ...files] = rest;
+  const n = requiredIssue(rest);
+  const [title, sep, ...files] = rest.slice(2);
   requireArgs(
     title?.trim() && !/[\r\n]/.test(title) && sep === "--" && files.length,
   );
@@ -378,17 +448,18 @@ async function main(args: string[]) {
   )
     throw Error("先处理进行中的 Git 操作。");
   if (git("ls-files", "-u")) throw Error("存在未解决的冲突。");
+  await issue(n);
   const actual = staged().sort();
   if (JSON.stringify(actual) !== JSON.stringify([...new Set(files)].sort()))
     throw Error(
       `声明的文件与暂存区不一致；未提交。暂存区：${JSON.stringify(actual)}`,
     );
   git("diff", "--cached", "--check");
-  git("commit", "-m", title, ...(n ? ["-m", `Refs: #${n}`] : []));
+  git("commit", "-m", title, "-m", `Refs: #${n}`);
   return {
     sha: git("rev-parse", "HEAD").trim(),
     subject: title,
-    issue: n ? Number(n) : null,
+    issue: Number(n),
     files: actual,
     pushed: false,
   };
