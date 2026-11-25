@@ -61,3 +61,4 @@ pnpm test:e2e
 - [技术决策](docs/decisions.md)
 - [实施记录](docs/progress.md)
 - [测试结果与七张截图](docs/test-report.md)
+- [仓库开发 harness：Issue、提交与交付](docs/harness.md)
