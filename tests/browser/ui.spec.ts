@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { join } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 test("工作台流程、主题、移动端、七个验收截图与控制台", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -53,6 +55,17 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
   await page.getByRole("button", { name: "检查连接" }).click();
   await expect(page.getByText("连接不可用", { exact: true })).toBeVisible();
   await shot("disconnected");
+  const projectPath = mkdtempSync(join(tmpdir(), "continuum-ui-project-"));
+  const projects = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "已授权项目" }) });
+  await expect(projects).not.toContainText("demo-project");
+  await projects.getByLabel("项目名称").fill("界面测试项目");
+  await projects.getByLabel("项目目录的绝对路径").fill(projectPath);
+  await projects.getByRole("button", { name: "授权项目" }).click();
+  await expect(
+    projects.getByText("界面测试项目", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "我的委托", exact: true }).click();
   await page.getByRole("button", { name: "高级创建" }).click();
   await page.getByLabel("目标名称").fill("浏览器验收");
@@ -61,7 +74,9 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
   const workspace = page.getByLabel("允许使用的项目目录");
   await workspace.selectOption(
     await workspace
-      .getByRole("option", { name: /\/demo-project$/ })
+      .getByRole("option", {
+        name: new RegExp(projectPath.split("/").at(-1)! + "$"),
+      })
       .elementHandle(),
   );
   await page.getByRole("button", { name: "创建目标" }).click();

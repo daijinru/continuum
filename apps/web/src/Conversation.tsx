@@ -1,19 +1,13 @@
+import { ProjectFolder } from "./ProjectFolder.tsx";
 import React, { useState, useEffect, useRef } from "react";
-import { api, useApp, useData, type Data } from "./lib.tsx";
+import { api, Form, field, useApp, useData, type Data } from "./lib.tsx";
 import { tokenTotal } from "./TokenUsage.tsx";
-import {
-  ArrowUp,
-  CornerUpLeft,
-  Folder,
-  Infinity as Loop,
-  X,
-} from "lucide-react";
+import { ArrowUp, CornerUpLeft, Infinity as Loop, X } from "lucide-react";
 import { Markdown } from "./Markdown.tsx";
 
 export function Conversation({ focus }: { focus?: string }) {
   const { data: settings } = useData<Data>("/settings");
   const { update } = useApp();
-  const [workspace, setWorkspace] = useState("");
   const [messages, setMessages] = useState<Data[]>([]),
     [more, setMore] = useState(false),
     [loaded, setLoaded] = useState(false);
@@ -108,13 +102,11 @@ export function Conversation({ focus }: { focus?: string }) {
         key: quick ? crypto.randomUUID() : requestKey.current,
         text: quick ? "现在都怎么样了？" : text.trim(),
         ...(!quick && (reply ? { replyTo: reply.id } : focus ? { focus } : {})),
-        ...(!quick && workspace ? { workspaceId: workspace } : {}),
       });
       if (!quick) {
         setText("");
         sessionStorage.removeItem("main-draft");
         setReply(null);
-        setWorkspace("");
         requestKey.current = crypto.randomUUID();
         if (focus) location.hash = "chat";
       }
@@ -208,12 +200,29 @@ export function Conversation({ focus }: { focus?: string }) {
                 ) : (
                   <Markdown text={m.body} />
                 )}
+                {m.kind === "project" && !m.resolvedBy && settings && (
+                  <ProjectQuestion
+                    message={m}
+                    projects={settings.workspaces}
+                    canChooseFolder={settings.service.canChooseFolder}
+                    onResolved={async () => {
+                      const rows = await api("/conversation");
+                      setMessages((old) =>
+                        old.map((row) =>
+                          row.id === m.id ? { ...row, resolvedBy: true } : row,
+                        ),
+                      );
+                      merge(rows);
+                    }}
+                  />
+                )}
                 {m.role === "assistant" && (
                   <div className="links">
                     {m.origin?.startsWith("inbox:") && (
                       <a href={"#inbox/" + m.origin.slice(6)}>查看请求</a>
                     )}
-                    {m.refs.length > 0 && (
+                    {(m.refs.length > 0 ||
+                      (m.kind === "project" && !m.resolvedBy)) && (
                       <button
                         onClick={() => {
                           setReply(m);
@@ -312,27 +321,6 @@ export function Conversation({ focus }: { focus?: string }) {
           </div>
           {error && <p role="alert">{error}</p>}
           <div className="compose-tools">
-            <details>
-              <summary>
-                <Folder size={13} /> {workspace ? "已选项目" : "工作目录"}
-              </summary>
-              <label>
-                新工作使用的目录
-                <select
-                  value={workspace}
-                  onChange={(e) => setWorkspace(e.target.value)}
-                >
-                  <option value="">独立委托目录</option>
-                  {settings?.workspaces
-                    .filter((w: Data) => w.enabled)
-                    .map((w: Data) => (
-                      <option key={w.id} value={w.id}>
-                        {w.path}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            </details>
             <button
               type="button"
               disabled={busy}
@@ -340,9 +328,11 @@ export function Conversation({ focus }: { focus?: string }) {
             >
               问进度
             </button>
-            {settings?.usage && <a href="#settings" aria-label="查看主对话 token 用量明细">
-              主对话用量：{tokenTotal(settings.usage.conversation)}
-            </a>}
+            {settings?.usage && (
+              <a href="#settings" aria-label="查看主对话 token 用量明细">
+                主对话用量：{tokenTotal(settings.usage.conversation)}
+              </a>
+            )}
             <small role="status">
               {busy ? "正在处理…" : "⌘ K 输入　⌘ ↵ 发送"}
             </small>
@@ -350,5 +340,100 @@ export function Conversation({ focus }: { focus?: string }) {
         </div>
       </form>
     </div>
+  );
+}
+
+function ProjectQuestion({
+  message,
+  projects,
+  canChooseFolder,
+  onResolved,
+}: {
+  message: Data;
+  projects: Data[];
+  canChooseFolder: boolean;
+  onResolved: () => Promise<void>;
+}) {
+  const matching = projects.filter(
+    (p) => p.name.toLowerCase() === message.project?.toLowerCase(),
+  );
+  const [selection, select] = useState(
+    matching.length === 1
+      ? matching[0].id
+      : projects.length && (matching.length || message.project === "?")
+        ? ""
+        : "new",
+  );
+  const selected = projects.find((p) => p.id === selection);
+  return (
+    <Form
+      onSubmit={async (f) => {
+        const decision =
+          selection === "new"
+            ? {
+                kind: "authorize",
+                path: field(f, "path"),
+                name: field(f, "name") || undefined,
+              }
+            : selection === "independent"
+              ? { kind: "independent" }
+              : selection === "cancel"
+                ? { kind: "cancel" }
+                : {
+                    kind: "select",
+                    workspaceId: selection,
+                    enable: selected?.enabled === 0,
+                  };
+        await api("/conversation/projects/" + message.id, decision);
+        await onResolved();
+      }}
+    >
+      <label>
+        这项委托使用的项目
+        <select
+          value={selection}
+          onChange={(e) => select(e.target.value)}
+          required
+        >
+          <option value="" disabled>
+            请选择项目
+          </option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} · {p.path}
+              {p.enabled ? "" : "（已停用）"}
+            </option>
+          ))}
+          <option value="independent">作为独立委托处理</option>
+          <option value="new">授权新的本地项目…</option>
+          <option value="cancel">取消这项委托</option>
+        </select>
+      </label>
+      {selection === "new" && (
+        <>
+          <label>
+            项目名称
+            <input
+              name="name"
+              maxLength={160}
+              defaultValue={message.project === "?" ? "" : message.project}
+            />
+          </label>
+          <ProjectFolder canChoose={canChooseFolder} />
+          <small>授权后，以后提到这个项目即可使用。</small>
+        </>
+      )}
+      <button disabled={!selection}>
+        {selection === "new"
+          ? "授权并继续"
+          : selection === "independent"
+            ? "独立执行"
+            : selection === "cancel"
+              ? "确认取消"
+              : selected && !selected.enabled
+                ? "重新启用并继续"
+                : "使用这个项目"}
+      </button>
+    </Form>
   );
 }

@@ -206,3 +206,106 @@ test("在途观察遇到暂停：不投递旧结果，也不推进成功游标",
     await api.app.close();
   }
 });
+
+test("每项工作单独关联项目，待确认项跨重启恢复且只接单一次", async () => {
+  const home = fixture();
+  let api = await createServer({ home, worker: false, seed: false });
+  try {
+    const project = api.db.workspace(fixture(), "计划室");
+    const c = new MainConversation(api.s, async () => [
+      intent("work", "修复计划室导出", { project: "计划室" }),
+      intent("work", "写旅行清单", { project: "" }),
+      intent("work", "更新画册的说明", { project: "画册" }),
+    ]);
+    const msg = {
+      key: key(),
+      text: "修复计划室导出，写旅行清单，再更新画册的说明",
+    };
+    await c.send(msg);
+    await c.send(msg);
+    const rows = api.db.all("SELECT * FROM goals ORDER BY rowid");
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].workspace_id, project.id);
+    assert.notEqual(rows[1].workspace_id, project.id);
+    assert.deepEqual(
+      api.db.projects().map((p) => p.id),
+      [project.id],
+    );
+    const question = timeline(api.db).find((m) => m.kind === "project")!;
+    assert.equal(question.project, "画册");
+    await api.app.close();
+    api = await createServer({ home, worker: false, seed: false });
+    const payload = { kind: "authorize", path: fixture(), name: "画册" };
+    const submit = (body: object) =>
+      api.app.inject({
+        method: "POST",
+        url: "/api/v1/conversation/projects/" + question.id,
+        headers: { "x-continuum-token": api.token },
+        payload: body,
+      });
+    const responses = await Promise.all([submit(payload), submit(payload)]);
+    assert.ok(responses.every((r) => r.statusCode === 200));
+    assert.equal(responses[0].json().data.id, responses[1].json().data.id);
+    assert.equal((await submit({ kind: "cancel" })).statusCode, 409);
+    const settings = (await api.app.inject("/api/v1/settings")).json().data;
+    assert.equal(settings.workspaces.length, 2);
+    assert.equal(
+      settings.workspaces.find((p: { name: string }) => p.name === "画册")
+        .affected,
+      1,
+    );
+    assert.equal(api.db.all("SELECT id FROM user_messages").length, 3);
+    assert.equal(
+      timeline(api.db).find((m) => m.id === msg.key)!.refs.length,
+      3,
+    );
+    assert.ok(timeline(api.db).find((m) => m.id === question.id)!.resolvedBy);
+  } finally {
+    await api.app.close();
+  }
+});
+
+test("同名项目先确认，停用须明确重新授权；单独回复项目名称可以继续", async () => {
+  const api = await createServer({
+    home: fixture(),
+    worker: false,
+    seed: false,
+  });
+  try {
+    const { db, s } = api;
+    const p = db.workspace(fixture(), "计划室");
+    db.workspace(fixture(), "计划室");
+    const other = db.workspace(fixture(), "资料库");
+    const c = new MainConversation(s, async () => [
+      intent("work", "修计划室导出", { project: "计划室" }),
+    ]);
+    await c.send({ key: key(), text: "修计划室导出" });
+    const first = timeline(db).at(-1)!;
+    assert.equal(first.kind, "project");
+    db.run("UPDATE workspaces SET enabled=0 WHERE id=?", p.id);
+    assert.throws(
+      () => c.resolveProject(first.id, { kind: "select", workspaceId: p.id }),
+      /停用/,
+    );
+    assert.equal(db.all("SELECT id FROM goals").length, 0);
+    c.resolveProject(first.id, {
+      kind: "select",
+      workspaceId: p.id,
+      enable: true,
+    });
+    assert.equal(db.must("SELECT workspace_id FROM goals").workspace_id, p.id);
+    c.route = async () => [intent("work", "更新导出", { project: "?" })];
+    await c.send({ key: key(), text: "更新导出" });
+    const answer = { key: key(), text: "资料库" };
+    await c.send(answer);
+    await c.send(answer);
+    assert.equal(
+      db.must("SELECT workspace_id FROM goals WHERE title='更新导出'")
+        .workspace_id,
+      other.id,
+    );
+    assert.equal(db.all("SELECT id FROM user_messages").length, 2);
+  } finally {
+    await api.app.close();
+  }
+});

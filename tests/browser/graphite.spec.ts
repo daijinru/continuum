@@ -53,3 +53,42 @@ test("石墨灰主对话：系统外观、定向回复、问进度与键盘焦�
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(375);
 });
+
+test("主输入框不选目录，首次项目授权在对应消息内完成", async ({ page }) => {
+  const id = "20000000-0000-4000-8000-000000000002";
+  let confirmed = false;
+  await page.route("**/api/v1/conversation", (r) =>
+    r.fulfill({
+      json: {
+        data: [
+          {
+            id,
+            seq: 1,
+            role: "assistant",
+            kind: "project",
+            body: "请确认计划室对应的本地项目。",
+            created: "2026-11-25T01:02:00Z",
+            refs: [],
+            project: "计划室",
+            resolvedBy: confirmed ? id : null,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/v1/conversation/projects/" + id, (r) => {
+    expect(r.request().postDataJSON()).toEqual({
+      kind: "authorize",
+      path: "/example/planroom",
+      name: "计划室",
+    });
+    confirmed = true;
+    return r.fulfill({ json: { data: { id } } });
+  });
+  await page.goto("/");
+  await expect(page.locator(".main-composer")).not.toContainText("工作目录");
+  await page.getByLabel("项目目录的绝对路径").fill("/example/planroom");
+  await page.getByRole("button", { name: "授权并继续" }).click();
+  await expect(page.getByLabel("项目目录的绝对路径")).toHaveCount(0);
+  expect(confirmed).toBe(true);
+});

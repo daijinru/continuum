@@ -1,3 +1,4 @@
+import { ProjectFolder } from "./ProjectFolder.tsx";
 import React, { useState } from "react";
 import {
   Inbox as Tray,
@@ -502,7 +503,7 @@ export function Settings() {
   if (!d) return <Status error={error} />;
   return (
     <>
-      <Head title="工作台设置" sub="管理本机连接、工作目录与运行限制。" />
+      <Head title="工作台设置" sub="管理本机连接、已授权项目与运行限制。" />
       <section className="panel pad">
         <h2>Token 用量</h2>
         <TokenUsage label="工作台合计" usage={d.usage.all} />
@@ -540,11 +541,13 @@ export function Settings() {
       <section className="panel pad">
         <h2>
           <FolderPlus size={20} />
-          允许使用的目录
+          已授权项目
         </h2>
+        <p>添加你希望 Continuum 协助处理的本地项目。在对话中提到项目名，就能直接交代工作。</p>
         {d.workspaces.map((w: Data) => (
           <div className="listrow" key={w.id}>
-            <code className="grow">{w.path}</code>
+            <div className="grow"><strong>{w.name}</strong><div><code>{w.path}</code></div>
+              <small>{w.enabled ? `停用将影响 ${w.affected} 项委托` : "已停用，关联委托会保留"}</small></div>
             <Action
               run={() =>
                 api("/workspaces/" + w.id, { enabled: !w.enabled }, "PATCH")
@@ -556,15 +559,16 @@ export function Settings() {
         ))}
         <Form
           onSubmit={async (f) => {
-            await api("/workspaces", { path: field(f, "path") });
-            notice("已添加目录");
+            await api("/workspaces", { path: field(f, "path"), name: field(f, "name") || undefined });
+            notice("项目已授权");
           }}
         >
           <label>
-            本地绝对路径
-            <input name="path" required placeholder="/Users/…/project" />
+            项目名称（选填）
+            <input name="name" maxLength={160} placeholder="例如：计划室" />
           </label>
-          <button>添加目录</button>
+          <ProjectFolder canChoose={d.service.canChooseFolder} />
+          <button>授权项目</button>
         </Form>
       </section>
       <section className="panel pad">
