@@ -35,7 +35,24 @@ function fixture(t: import("node:test").TestContext) {
   git("remote", "add", "origin", "https://github.com/daijinru/continuum.git");
   const file = (name: string, body: string) =>
     writeFileSync(join(dir, name), body);
-  const harness = (...args: string[]) => exec(process.execPath, [cli, ...args]);
+  file(
+    "issues.mjs",
+    `globalThis.fetch = async url => {
+    const path = new URL(url).pathname;
+    if (path === "/repos/daijinru/continuum/issues/42")
+      return Response.json({number:42,html_url:"https://github.com/daijinru/continuum/issues/42"});
+    if (path === "/repos/daijinru/continuum/issues/43")
+      return Response.json({pull_request:{}});
+    return new Response(null, {status:404});
+  };`,
+  );
+  const harness = (...args: string[]) =>
+    exec(process.execPath, [
+      "--import",
+      pathToFileURL(join(dir, "issues.mjs")).href,
+      cli,
+      ...args,
+    ]);
   return { git, file, dir, harness, exec };
 }
 test("提交严格匹配暂存范围；保留同文件的未暂存修改；按 Issue 回查", (t) => {
@@ -59,6 +76,23 @@ test("提交严格匹配暂存范围；保留同文件的未暂存修改；按 I
   ]);
   git("rm", "--cached", "b.txt");
   file("a.txt", "staged\nnot staged\n");
+  for (const [flags, error] of [
+    [[], /缺少 --issue/],
+    [["--issue", "43"], /是 PR/],
+    [["--issue", "44"], /404/],
+  ] as const) {
+    const invalid = harness(
+      "commit",
+      "create",
+      ...flags,
+      "变更",
+      "--",
+      "a.txt",
+    );
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, error);
+    assert.equal(git("diff", "--cached", "--name-only").trim(), "a.txt");
+  }
   const r = harness(...args);
   assert.equal(r.status, 0, r.stderr);
   const result = JSON.parse(r.stdout);
@@ -84,7 +118,7 @@ test("Issue 读写：区分 PR，正文以 JSON 传输，评论失败不重试",
     "api.mjs",
     `globalThis.fetch=async url=>{
     const u=new URL(url);if(u.host!=="api.github.com") throw Error("wrong host");
-    return Response.json(u.pathname.endsWith("/comments")?[]:u.pathname.endsWith("/42")?{number:42,title:"Example",state:"open",comments:0}:u.pathname.endsWith("/43")?{pull_request:{}}:[{number:43,pull_request:{}},{number:42,state:"open",title:"Example"}]);
+    return Response.json(u.pathname.endsWith("/comments")?[]:u.pathname.endsWith("/42")?{number:42,title:"Example",state:"open",comments:0,html_url:"https://github.com/daijinru/continuum/issues/42"}:u.pathname.endsWith("/43")?{pull_request:{}}:[{number:43,pull_request:{}},{number:42,state:"open",title:"Example"}]);
   }`,
   );
   file(
@@ -243,5 +277,88 @@ test("本地清理只删已合并、远端已删、PR 尖端一致且无 worktre
         { cwd: dir },
       ).status === 0
     );
+  }
+});
+
+test("发布使用同一真实 Issue，核对 GitHub 关联后才开启合并", (t) => {
+  const { git, dir, file, harness } = fixture(t);
+  git("switch", "-qc", "feature");
+  git("commit", "--allow-empty", "-qm", "initial");
+  const realGit = spawnSync("which", ["git"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  file(
+    "git",
+    `#!${process.execPath}
+const fs = require("node:fs"), cp = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] === "ls-remote") console.log(cp.execFileSync(${JSON.stringify(realGit)}, ["rev-parse","HEAD"], {encoding:"utf8"}).trim()+"\\t"+args[2]);
+else if (args[0] === "push") fs.appendFileSync("writes","push\\n");
+else process.exit(cp.spawnSync(${JSON.stringify(realGit)},args,{stdio:"inherit"}).status);
+`,
+  );
+  chmodSync(join(dir, "git"), 0o700);
+  const url = "https://github.com/daijinru/continuum/pull/55";
+  const target = "https://github.com/daijinru/continuum/issues/42";
+  file(
+    "gh",
+    `#!${process.execPath}
+const fs = require("node:fs"), args = process.argv.slice(2), url = ${JSON.stringify(url)};
+const pr=JSON.parse(fs.readFileSync("pr.json"));
+const write=op=>fs.appendFileSync("writes",op+"\\n");
+let output;
+if(args.includes("repos/daijinru/continuum/rules/branches/main")) output=[{type:"required_status_checks",parameters:{required_status_checks:[{context:"lint",integration_id:15368}]}}];
+else if(args[1]==="list") output=pr.exists?[{url,headRepositoryOwner:{login:"daijinru"}}]:[];
+else if(args[1]==="create"){write("create");pr.body=args.at(-1);pr.exists=true;output=url;}
+else if(args.includes("PATCH")){write("patch");pr.body=JSON.parse(fs.readFileSync(0)).body;output={};}
+else if(args[1]==="merge"){write("merge");output="";}
+else if(args[1]==="view" && args.at(-1).includes("closingIssuesReferences"))
+  output={number:55,body:pr.body,closingIssuesReferences:pr.links ?? (pr.body.endsWith("Closes #42")?[{url:${JSON.stringify(target)}}]:[])};
+else if(args[1]==="view") output={state:"MERGED",baseRefName:"main",mergeCommit:{oid:"merged"}};
+else process.exit(2);
+fs.writeFileSync("pr.json",JSON.stringify(pr));
+console.log(typeof output === "string" ? output : JSON.stringify(output));`,
+  );
+  chmodSync(join(dir, "gh"), 0o700);
+  file("writes", "");
+  const writes = () => readFileSync(join(dir, "writes"), "utf8");
+  const submit = () => harness("pr", "submit", "--issue", "42");
+  assert.match(harness("commit", "push").stderr, /Refs/);
+  assert.match(harness("pr", "submit").stderr, /缺少 --issue/);
+  assert.match(submit().stderr, /Refs/);
+  git("commit", "--allow-empty", "-qm", "task", "-m", "Refs: #43");
+  assert.match(harness("commit", "push").stderr, /是 PR/);
+  assert.match(submit().stderr, /不一致/);
+  assert.equal(writes(), "");
+  git("commit", "--allow-empty", "-qm", "task", "-m", "Refs: #42");
+  const pushed = harness("commit", "push");
+  assert.equal(pushed.status, 0, pushed.stderr);
+  assert.equal(
+    JSON.parse(pushed.stdout).next,
+    "pnpm harness pr submit --issue 42",
+  );
+  for (const exists of [false, true]) {
+    file("pr.json", JSON.stringify({ exists, body: "已有说明" }));
+    file("writes", "");
+    const result = submit();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(writes(), exists ? "patch\nmerge\n" : "create\nmerge\n");
+    const { body } = JSON.parse(readFileSync(join(dir, "pr.json"), "utf8"));
+    assert.equal(body, exists ? "已有说明\n\nCloses #42" : "Closes #42");
+    file("writes", "");
+    assert.equal(submit().status, 0);
+    assert.equal(writes(), "merge\n");
+  }
+  for (const links of [
+    [],
+    [{ url: "https://github.com/another/repo/issues/42" }],
+  ]) {
+    file("writes", "");
+    file(
+      "pr.json",
+      JSON.stringify({ exists: true, body: "Closes #42", links }),
+    );
+    assert.equal(submit().status, 1);
+    assert.equal(writes(), "");
   }
 });

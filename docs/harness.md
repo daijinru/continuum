@@ -10,7 +10,7 @@
 pnpm harness status
 pnpm harness issue list open
 pnpm harness issue show 42
-# 确实缺少 Issue 并且需要公开跟踪时：
+# 改动仓库且没有同题 Issue 时，先创建并记下返回的编号：
 pnpm harness issue create "让用户能在主对话中查询提醒时间" < issue-body.md
 ```
 
@@ -27,7 +27,7 @@ pnpm harness commit log --issue 42
 pnpm harness commit show HEAD
 ```
 
-`commit create` 不暂存文件。传入的路径集合必须与整个暂存区完全一致，否则退出且不提交；部分暂存文件的未暂存内容不会被带入。路径使用 `status` 返回的仓库相对路径；重命名需同时声明旧、新路径。不关联 Issue 的本地维护可以省略 `--issue 42`。编号是提交关联标记，不以 GitHub 在线作为创建本地提交的前提。
+`commit create` 不暂存文件。传入的路径集合必须与整个暂存区完全一致，否则退出且不提交；部分暂存文件的未暂存内容不会被带入。路径使用 `status` 返回的仓库相对路径；重命名需同时声明旧、新路径。提交时必须指定本仓库的真实 Issue。harness 在线核对编号后写入 `Refs: #42`；误填 PR 编号会中止提交。
 
 ```sh
 pnpm harness commit push
@@ -42,7 +42,7 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 ## 轻量验证和自动合并
 
-默认交付范围及例外见 [仓库协作约定](../AGENTS.md)。提交 PR 前，先检查本分支相对 `main` 的**全部已提交改动**，然后推送并运行回执中 `next` 给出的 `pnpm harness pr submit`。如果 HEAD 有唯一的 `Refs: #42` 尾注，回执会带上 `--issue 42`，首次创建时将 `Closes #42` 写入新 PR。已有 PR 会复用，保留其描述与关单约定。用户要求仅评审时不执行 `pr submit`。工作区中的未提交修改不会进 PR。
+默认交付范围及例外见 [仓库协作约定](../AGENTS.md)。提交 PR 前，先检查本分支相对 `main` 的**全部已提交改动**，然后推送并运行回执中 `next` 给出的 `pnpm harness pr submit --issue N`。推送前从工作分支最近的非合并提交读取唯一的 `Refs: #42` 并核对 Issue。回执里的编号必须与 `pr submit --issue 42` 一致。新 PR 写入 `Closes #42`。复用 PR 时，已有正确关联就沿用；缺少关联时在原描述末尾补上；仅关联其他 Issue 时提示核对。启用自动合并前，以 GitHub 实际识别到的本仓库 Issue 链接为准。用户要求仅评审时不执行 `pr submit`。工作区中的未提交修改不会进 PR。
 
 仓库启用 GitHub 原生 auto-merge，`main` 的活动规则集要求通过 PR 和 GitHub Actions 的 `lint` 检查（应用 ID `15368`）。GitHub 检出 PR 合并候选、按锁文件安装依赖、运行 `pnpm lint`。新提交触发新检查。harness 只为当前工作分支的 PR 申请自动合并，校验已推送的 HEAD，不使用管理员绕过；普通 PR 只自动验证，不自动申请合并。若分支落后且规则要求同步，请先更新分支再验证。
 
@@ -51,7 +51,7 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 **由提交 PR 的开发会话负责修复和接续。** `pnpm harness pr watch N` 可从仓库的任何工作树只读跟进同一 PR；`N` 是 PR 编号，不是 Issue 编号。关闭终端后不在后台运行，恢复会话时重新执行即可。
 
 - `checks_failed`：回执含失败名称、结论及详情链接。打开失败作业，或用 `gh run view <run-id> --log-failed` 看日志。代码问题在原分支修复，验证、提交并 `commit push`；确认为临时基础设施故障才重跑失败作业。接着 `pr watch N` 看最新 HEAD，不重开 PR，也不以旧作业绿灯为准。
-- `behind` / `conflicts`：在原工作分支同步 `origin/main`，按需解决冲突、验证并推送，然后继续监听。`auto_merge_off`：核对原因后，若仍应合并，在原分支重新 `pr submit`。
+- `behind` / `conflicts`：在原工作分支同步 `origin/main`，按需解决冲突、验证并推送，然后继续监听。`auto_merge_off`：核对原因后，若仍应合并，在原分支重新执行 `pr submit --issue N`。
 - `review`、`draft`、`closed` 或目标分支不符：回执非零退出，核对所需审批或原意。读取暂时失败会退避重试，连续三次失败或状态 30 分钟不变时交回会话诊断；处理后接续，不能据此宣称已合入。
 
 ## 分支清理

@@ -77,7 +77,7 @@ function assess(p: Snapshot) {
   if (p.state === "OPEN" && !p.autoMergeRequest)
     return {
       outcome: "auto_merge_off",
-      next: "核对自动合并关闭原因；仍需交付时从原工作分支执行 pr submit。",
+      next: "核对自动合并关闭原因；仍需交付时从原工作分支执行 pr submit --issue N（N 为关联的 Issue 编号）。",
     };
   // Checks can be absent, green before merge, or attached to a new head.
   return { outcome: "waiting" };
