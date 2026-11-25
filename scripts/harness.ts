@@ -16,6 +16,8 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
                                        仅提交已经审阅过的暂存区
   commit push                          非强制推送当前工作分支
   pr submit [--issue N]                为已推送的工作分支开/复用 PR，lint 通过后合并
+  branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
+  branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
 返回 JSON；错误写 stderr，退出码非零。路径相对仓库根目录。`;
 
 function run(tool: string, args: string[], cwd: string, input?: string) {
@@ -105,6 +107,16 @@ async function main(args: string[]) {
   const git = (...a: string[]) => run("git", a, root);
   checkRemote(git("remote", "get-url", "--all", "origin"));
   const [area, op, ...rest] = args;
+  if (area === "branch") {
+    requireArgs(op === "cleanup" || op === "auto");
+    return JSON.parse(
+      run(
+        process.execPath,
+        [resolve(root, "scripts/merged-branches.mjs"), op, ...rest],
+        root,
+      ),
+    );
+  }
   const staged = () =>
     git("diff", "--cached", "--no-renames", "--name-only", "-z")
       .split("\0")
