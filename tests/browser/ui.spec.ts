@@ -10,7 +10,7 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
       path: "docs/screenshots/" + name + ".png",
       fullPage: true,
     });
-  await page.goto("/");
+  await page.goto("/#today");
   await expect(page.getByRole("heading", { name: "今日简报" })).toBeVisible();
   await expect(page.getByText("地图渲染通过验证")).toBeVisible();
   await shot("today");
@@ -65,10 +65,11 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
   await page.getByRole("button", { name: "开始运行" }).click();
   await expect(page.getByRole("button", { name: "中断本轮" })).toBeVisible();
   await page.getByRole("button", { name: "跟进目标" }).click();
-  await page.getByLabel("跟进指令", { exact: true }).fill("检查下一项验收条件");
-  await page.getByRole("button", { name: "发送指令", exact: true }).click();
-  await page.getByRole("button", { name: "指令历史" }).click();
-  await expect(page.getByText("检查下一项验收条件")).toBeVisible();
+  await page.getByLabel("发到主对话").fill("进度怎么样了？");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.locator(".chat-message.assistant").last()).toContainText(
+    "浏览器验收",
+  );
   await page.getByRole("button", { name: "切换明暗主题" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.setViewportSize({ width: 390, height: 844 });

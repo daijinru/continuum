@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import { Store, Problem, now, uid } from "./db.ts";
 import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
+import { MainConversation, sendInput, timeline } from "./main-conversation.ts";
+import { MainAgenda } from "./main-agenda.ts";
 import {
   goalInput,
   startInput,
@@ -35,7 +37,9 @@ export async function createServer(
 ) {
   const db = new Store(options.home),
     s = new Service(db, options.delay),
-    worker = new Worker(s);
+    worker = new Worker(s),
+    conversation = new MainConversation(s),
+    agenda = new MainAgenda(s);
   await s.recover();
   if (options.seed !== false) s.seed();
   const app = Fastify({ bodyLimit: 32768, logger: false });
@@ -100,6 +104,12 @@ export async function createServer(
     z.coerce.number().int().nonnegative().default(0).parse(q.offset);
   get("/session", () => ({ token }));
   get("/health", () => ({ ready: true }));
+  get("/conversation", ({ q }) =>
+    timeline(db, q.before ? offset({ offset: q.before }) : undefined),
+  );
+  post("/conversation/messages", ({ body }) =>
+    conversation.send(sendInput.parse(body)),
+  );
   get("/system/status", () => ({
     worker: { lastTick: worker.lastTick, error: worker.error },
     connections: db.all("SELECT * FROM agent_connections"),
@@ -195,6 +205,15 @@ export async function createServer(
   });
   get("/goals/:id", ({ id }) => ({
     ...s.goal(id),
+    arrangement:
+      db.one(
+        "SELECT mode,cadence,notify,next_at,last_note,succeeded,attempted FROM main_tasks WHERE goal_id=?",
+        id,
+      ) || null,
+    nativeResults: db.all(
+      `SELECT m.id,m.body,m.created FROM main_refs r JOIN main_messages m ON m.id=r.message_id WHERE r.goal_id=? AND (m.origin LIKE 'watch:%' OR m.origin LIKE 'remind:%' OR m.origin LIKE 'watch-failed:%') ORDER BY seq DESC LIMIT 40`,
+      id,
+    ),
     checks: db.all("SELECT * FROM criterion_checks WHERE goal_id=?", id),
     workspace: db.must(
       "SELECT w.* FROM workspaces w JOIN goals g ON g.workspace_id=w.id WHERE g.id=?",
@@ -398,6 +417,8 @@ export async function createServer(
   );
   post("/goals/:id/schedules", ({ id, body }) => {
     const g = s.goal(id);
+    if (db.one("SELECT 1 FROM main_tasks WHERE goal_id=?", id))
+      throw new Problem("请在主对话里调整这项委托的时间，避免重复排期。");
     db.allowed(g.workspace_id);
     if (g.state !== "active") throw new Problem("请先恢复目标");
     const b = scheduleInput.parse(body),
@@ -554,10 +575,13 @@ export async function createServer(
       throw new Problem("请先构建前端资源", 404);
     }
   });
-  if (options.worker !== false) worker.start();
+  if (options.worker !== false) {
+    worker.start();
+    agenda.start();
+  }
   app.addHook("onClose", async () => {
-    await worker.stop();
+    await Promise.all([worker.stop(), agenda.stop(), conversation.drain()]);
     s.close();
   });
-  return { app, s, db, worker, token };
+  return { app, s, db, worker, token, conversation, agenda };
 }

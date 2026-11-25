@@ -189,8 +189,17 @@ export function generate(
     const jobs = db.all(
       "SELECT j.id,j.goal_id,j.instruction,j.next_at,g.title goal FROM schedule_jobs j JOIN goals g ON g.id=j.goal_id WHERE j.state='enabled' AND g.state='active' ORDER BY j.next_at",
     );
+    const native = db.all(
+      `SELECT m.seq,m.id,g.id goal_id,g.title goal,m.body summary,m.created updated,m.kind
+      FROM main_messages m JOIN main_refs r ON r.message_id=m.id JOIN goals g ON g.id=r.goal_id
+      WHERE (m.origin LIKE 'watch:%' OR m.origin LIKE 'remind:%' OR m.origin LIKE 'watch-failed:%')
+      AND m.seq>? AND m.created>=? ORDER BY m.seq DESC`,
+      window === "since" ? cursor.main_seq : 0,
+      window === "since" ? "" : begin,
+    );
     const revision = JSON.stringify([
-      "delivery-v1",
+      "delivery-v2",
+      native[0]?.seq || 0,
       window,
       window === "since" ? null : begin,
       start,
@@ -219,12 +228,17 @@ export function generate(
     ).n;
     const delivered = reports(db, start, end);
     const snapshot = {
+      native,
       reports: delivered,
       window,
       sections,
       count,
       quiet:
-        !needs.length && !stories.length && !jobs.length && !delivered.length,
+        !needs.length &&
+        !stories.length &&
+        !jobs.length &&
+        !delivered.length &&
+        !native.length,
       goalCount: new Set([...needs, ...stories, ...jobs].map((s) => s.goal_id))
         .size,
     };
@@ -268,10 +282,11 @@ export const unpack = (b: Row) => ({
 export function acknowledge(db: Store, id: string) {
   const b = db.must("SELECT * FROM briefings WHERE id=?", id);
   db.run(
-    "UPDATE attention_cursors SET seq=?,briefing_id=?,reviewed=? WHERE id=1 AND seq<=?",
+    "UPDATE attention_cursors SET seq=?,briefing_id=?,reviewed=?,main_seq=max(main_seq,?) WHERE id=1 AND seq<=?",
     b.end_seq,
     id,
     b.window_end,
+    JSON.parse(b.snapshot).native?.[0]?.seq || 0,
     b.end_seq,
   );
   return db.must("SELECT * FROM attention_cursors");
