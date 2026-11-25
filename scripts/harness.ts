@@ -15,6 +15,7 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   commit create [--issue N] "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
   commit push                          非强制推送当前工作分支
+  pr submit [--issue N]                为已推送的工作分支开/复用 PR，lint 通过后合并
 返回 JSON；错误写 stderr，退出码非零。路径相对仓库根目录。`;
 
 function run(tool: string, args: string[], cwd: string, input?: string) {
@@ -72,9 +73,17 @@ async function get(path: string) {
   });
   if (r.status === 403 || r.status === 429) {
     try {
-      return JSON.parse(run("gh", ["api", "--hostname", "github.com", `repos/${repo}${path}`], process.cwd()));
+      return JSON.parse(
+        run(
+          "gh",
+          ["api", "--hostname", "github.com", `repos/${repo}${path}`],
+          process.cwd(),
+        ),
+      );
     } catch {
-      throw Error(`GitHub 公开读取受到限制（HTTP ${r.status}），登录态读取也未成功。请运行 gh auth login -h github.com 后重试。`);
+      throw Error(
+        `GitHub 公开读取受到限制（HTTP ${r.status}），登录态读取也未成功。请运行 gh auth login -h github.com 后重试。`,
+      );
     }
   }
   if (!r.ok) throw Error(`GitHub 读取失败：HTTP ${r.status} ${r.statusText}`);
@@ -199,6 +208,76 @@ async function main(args: string[]) {
     const updated =
       i.state === state ? i : write("PATCH", `/issues/${n}`, { state });
     return { number: i.number, state: updated.state, url: updated.html_url };
+  }
+  if (area === "pr") {
+    requireArgs(
+      op === "submit" &&
+        (!rest.length || (rest.length === 2 && rest[0] === "--issue")),
+    );
+    const n = rest.length ? number(rest[1]) : undefined;
+    const b = branch();
+    if (!b || ["main", "master"].includes(b))
+      throw Error("请在已推送的工作分支上提交 PR。");
+    const sha = git("rev-parse", "HEAD").trim();
+    if (git("ls-remote", "origin", `refs/heads/${b}`).split("\t")[0] !== sha)
+      throw Error("远端分支不是当前 HEAD，请先核对并执行 commit push。");
+    const gh = (...args: string[]) => run("gh", args, root).trim();
+    const rules = JSON.parse(gh("api", `repos/${repo}/rules/branches/main`));
+    if (
+      !rules.some(
+        (r: any) =>
+          r.type === "required_status_checks" &&
+          r.parameters?.required_status_checks?.some(
+            (c: any) => c.context === "lint" && c.integration_id === 15368,
+          ),
+      )
+    )
+      throw Error("main 缺少必需的 GitHub Actions lint 规则，不开启自动合并。");
+    if (n) await issue(n);
+    const found = JSON.parse(
+      gh(
+        "pr",
+        "list",
+        "-R",
+        repo,
+        "--base",
+        "main",
+        "--head",
+        b,
+        "--state",
+        "open",
+        "--json",
+        "url,headRepositoryOwner",
+      ),
+    ).find(
+      (p: any) => p.headRepositoryOwner?.login?.toLowerCase() === "daijinru",
+    );
+    const url =
+      found?.url ||
+      gh(
+        "pr",
+        "create",
+        "-R",
+        repo,
+        "--base",
+        "main",
+        "--head",
+        b,
+        "--title",
+        git("log", "-1", "--format=%s").trim(),
+        "--body",
+        n ? `Closes #${n}` : "通过仓库 harness 提交。",
+      );
+    gh("pr", "merge", url, "--auto", "--merge", "--match-head-commit", sha);
+    return JSON.parse(
+      gh(
+        "pr",
+        "view",
+        url,
+        "--json",
+        "number,url,state,headRefOid,autoMergeRequest,mergeCommit",
+      ),
+    );
   }
   requireArgs(area === "commit");
   if (op === "log") {
