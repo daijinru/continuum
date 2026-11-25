@@ -26,6 +26,7 @@ import {
   type Data,
 } from "./lib.tsx";
 import { Story } from "./Feed.tsx";
+import { TokenUsage } from "./TokenUsage.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Delivery, Preference } from "./Commission.tsx";
 function GoalForm({ close }: { close: () => void }) {
@@ -235,6 +236,7 @@ export function Goal({ id }: { id: string }) {
           ))}
         </select>
       </Head>
+      <TokenUsage label="本项委托的 token 用量" usage={g.usage} />
       <div className="goal-controls">
         {g.arrangement && (
           <p>
