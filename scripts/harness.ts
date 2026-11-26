@@ -15,8 +15,8 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   commit show HEAD|SHA                 单次提交及文件统计
   commit create --issue N "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
-  commit push                          推送当前工作分支，返回提交 PR 的下一条命令
-  pr submit --issue N                开/复用 PR，申请自动合并并监听至合入或需处理
+  commit push                          核对分支所有任务提交属于同一 Issue，再推送
+  pr submit --issue N                  核对分支和 PR 的唯一任务，申请自动合并并监听
   pr watch N                           按 PR 编号接续监听；仅确认已合入 main 时成功
   branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
   branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
@@ -133,22 +133,42 @@ async function main(args: string[]) {
       .split("\0")
       .filter(Boolean);
   const branch = () => git("branch", "--show-current").trim();
-  const commitIssue = (sha: string) => {
-    // A sync merge can sit above the last task commit on the working branch.
-    const refs = git(
+  const branchIssue = (sha: string, expected?: string) => {
+    git(
+      "fetch",
+      "--no-tags",
+      "origin",
+      "refs/heads/main:refs/remotes/origin/main",
+    );
+    // Exclude commits already on main, including those brought in by a sync merge.
+    // Traverse all parents so merging a second task branch cannot hide its commits.
+    const commits = git(
       "log",
-      "-1",
-      "--first-parent",
       "--no-merges",
-      "--format=%(trailers:key=Refs,valueonly)",
-      sha,
-    ).trim();
-    const match = /^#([1-9]\d{0,9})$/.exec(refs);
-    if (!match)
-      throw Error(
-        "工作分支最近的任务提交须包含唯一的 Refs: #N 尾注，请核对提交和 Issue。",
-      );
-    return match[1];
+      "-z",
+      "--format=%h %(trailers:key=Refs,valueonly,separator=%x2c)",
+      `refs/remotes/origin/main..${sha}`,
+      "--",
+    )
+      .split("\0")
+      .filter(Boolean);
+    let task: string | undefined;
+    for (const commit of commits) {
+      const match = /^([0-9a-f]+) #([1-9]\d{0,9})$/.exec(commit);
+      if (!match)
+        throw Error(
+          `提交 ${commit.split(" ", 1)[0]} 须包含唯一的 Refs: #N 尾注。请核对该提交的任务归属。`,
+        );
+      const [, id, issueNumber] = match;
+      const required = expected ?? task;
+      if (required && required !== issueNumber)
+        throw Error(
+          `提交 ${id} 属于 #${issueNumber}，与本次交付的 #${required} 不一致。请按任务分支分别提交 PR。`,
+        );
+      task = issueNumber;
+    }
+    if (!task) throw Error("相对 origin/main 没有待交付的任务提交。");
+    return task;
   };
   const log = (n?: string) =>
     git(
@@ -275,8 +295,7 @@ async function main(args: string[]) {
     if (!b || ["main", "master"].includes(b))
       throw Error("请在已推送的工作分支上提交 PR。");
     const sha = git("rev-parse", "HEAD").trim();
-    if (n !== commitIssue(sha))
-      throw Error("--issue 与工作分支的 Refs: #N 不一致。");
+    branchIssue(sha, n);
     const target = await issue(n);
     if (git("ls-remote", "origin", `refs/heads/${b}`).split("\t")[0] !== sha)
       throw Error("远端分支不是当前 HEAD，请先核对并执行 commit push。");
@@ -337,14 +356,18 @@ async function main(args: string[]) {
           "number,body,closingIssuesReferences",
         ),
       );
-    const linked = (pr: { closingIssuesReferences: { url: string }[] }) =>
-      pr.closingIssuesReferences.some((ref) => ref.url === target.html_url);
+    const linked = (pr: { closingIssuesReferences: { url: string }[] }) => {
+      const other = pr.closingIssuesReferences.find(
+        (ref) => ref.url !== target.html_url,
+      );
+      if (other)
+        throw Error(
+          `PR ${url} 还会关闭 ${other.url}。请拆出独立任务，让此 PR 只关闭 #${n}。`,
+        );
+      return pr.closingIssuesReferences.length > 0;
+    };
     let pr = readLink();
     if (!linked(pr) && found) {
-      if (pr.closingIssuesReferences.length)
-        throw Error(
-          `已有 PR 关联了其他 Issue。请核对 ${url}，确认应同时关联 #${n} 后再提交。`,
-        );
       // Preserve the description. Skip a second append after a lost write or a
       // delay in GitHub's link index, but always verify the actual relation.
       if (
@@ -416,7 +439,7 @@ async function main(args: string[]) {
       throw Error("请从工作分支发布；此命令不推送默认分支或游离 HEAD。");
     checkRemote(git("remote", "get-url", "--push", "--all", "origin"));
     const sha = git("rev-parse", "HEAD").trim();
-    const n = commitIssue(sha);
+    const n = branchIssue(sha);
     await issue(n);
     git("push", "origin", `${sha}:refs/heads/${b}`);
     return {
