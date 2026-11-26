@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React from "react";
+import { useRowState } from "./chat-row-state.ts";
 import { Badge, dt, Status, api, useLoad, type Data } from "./lib.tsx";
 
 function ApprovalList({ goal, before, revision }: { goal: string; before?: number; revision?: number }) {
-  const [more, setMore] = useState(false);
+  const [more, setMore] = useRowState("approvals-before-" + before, false);
   const path = "/conversation/approvals/" + goal + (before ? "?before=" + before : "");
   const { data, error } = useLoad<Data[]>(path + ":" + (revision ?? 0), () => api(path));
   if (!data) return <Status error={error} />;
@@ -34,11 +35,11 @@ export function ChatApprovals({
   message: Data;
   reply: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowState("approvals-open", false);
   return (
     <section className="chat-approvals">
-      <details onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary>
+      <details open={open}>
+        <summary onClick={e => { e.preventDefault(); setOpen(!open); }}>
           <strong>操作审批</strong>
           <span className="approval-goal" title={message.refs[0]?.title}>
             {message.refs[0]?.title || "这项委托"}

@@ -1,16 +1,17 @@
-import { ProjectFolder } from "./ProjectFolder.tsx";
-import React, { useState, useEffect, useRef } from "react";
-import { api, Form, field, useData, type Data } from "./lib.tsx";
-import { ChatApprovals } from "./ChatApprovals.tsx";
-import { outgoingRow, queueMessage, reconcileOutbox, retryMessage, useOutbox } from "./conversation-outbox.ts";
+import { messageKey } from "./chat-row-state.ts";
+import type { VirtuosoHandle } from "react-virtuoso";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { api, useData, type Data } from "./lib.tsx";
+import { outgoingRow, queueMessage, reconcileOutbox, useOutbox } from "./conversation-outbox.ts";
 import { tokenTotal } from "./TokenUsage.tsx";
-import { ArrowUp, ArrowUpRight, ChevronDown, CornerUpLeft, Infinity as Loop, Link2, X } from "lucide-react";
-import { Markdown } from "./Markdown.tsx";
+import { ArrowUp, CornerUpLeft, X } from "lucide-react";
+
+const ChatHistory = React.lazy(() => import("./ChatHistory.tsx"));
 
 export function Conversation({ focus }: { focus?: string }) {
   const { data: settings } = useData<Data>("/settings");
   const outbox = useOutbox();
-  const [messages, setMessages] = useState<Data[]>([]),
+  const [{ rows: messages, firstIndex }, setHistory] = useState({ rows: [] as Data[], firstIndex: 1 }),
     [more, setMore] = useState(false),
     [loaded, setLoaded] = useState(false);
   const [text, setText] = useState(
@@ -24,32 +25,38 @@ export function Conversation({ focus }: { focus?: string }) {
     refresh = useRef<() => void>(() => {}),
     earlier = useRef<() => void>(() => {}),
     floor = useRef(0),
-    stream = useRef<HTMLDivElement>(null),
-    pinned = useRef(true),
+    list = useRef<VirtuosoHandle>(null),
+    jumpToSent = useRef(false),
     editor = useRef<HTMLTextAreaElement>(null);
   const merge = (rows: Data[], mode: "latest" | "changes" | "history" = "latest") => {
-    setMessages(old => {
+    setHistory(history => {
+      const old = history.rows;
       const unique = new Map<string, Data>();
-      for (const row of old) unique.set(row.approvalGoal ? "approval:" + row.approvalGoal : row.id, row);
+      for (const row of old) unique.set(messageKey(row), row);
       for (const row of rows) {
         if (mode === "changes" && row.seq < floor.current) continue;
-        const key = row.approvalGoal ? "approval:" + row.approvalGoal : row.id;
+        const key = messageKey(row);
         const known = unique.get(key);
         if (!known || known.seq < row.seq || (known.seq === row.seq && mode !== "history")) unique.set(key, row);
       }
-      return [...unique.values()].sort((a, b) => a.seq - b.seq);
+      const merged = [...unique.values()].sort((a, b) => a.seq - b.seq);
+      // Each prepended logical row consumes at least one older sequence number.
+      const firstIndex = !old.length ? merged[0]?.seq ?? 1
+        : history.firstIndex - (mode === "history" ? merged.findIndex(m => m.seq >= old[0].seq) : 0);
+      return { rows: merged, firstIndex };
     });
     reconcileOutbox(rows);
   };
-  const ids = new Set(messages.map(m => m.id));
-  const visible = [...messages, ...outbox.filter(e => !ids.has(e.submission.key)).map(outgoingRow)]
-    .sort((a, b) => a.seq - b.seq);
-  const resolved = async (id: string) => {
-    setMessages((old) =>
-      old.map((row) => (row.id === id ? { ...row, resolvedBy: true } : row)),
-    );
+  const visible = useMemo(() => {
+    if (!outbox.length) return messages;
+    const ids = new Set(messages.map(m => m.id));
+    return [...messages, ...outbox.filter(e => !ids.has(e.submission.key)).map(outgoingRow)]
+      .sort((a, b) => a.seq - b.seq);
+  }, [messages, outbox]);
+  const resolved = useCallback(async (id: string) => {
+    setHistory(old => ({ ...old, rows: old.rows.map(row => row.id === id ? { ...row, resolvedBy: true } : row) }));
     refresh.current();
-  };
+  }, []);
   useEffect(() => {
     let alive = true, fetching = false, pending = false, older = false, version: number | undefined;
     let loadedOnce = false;
@@ -88,7 +95,7 @@ export function Conversation({ focus }: { focus?: string }) {
             const batch = await api("/conversation/changes?since=" + version);
             if (!alive) return;
             if (batch.version < version) {
-              setMessages([]);
+              setHistory({ rows: [], firstIndex: 1 });
               loadedOnce = false;
               version = undefined;
               pending = true;
@@ -164,12 +171,14 @@ export function Conversation({ focus }: { focus?: string }) {
     return () => window.removeEventListener("keydown", focusEditor);
   }, []);
   useEffect(() => {
-    if (pinned.current && stream.current)
-      stream.current.scrollTop = stream.current.scrollHeight;
-  }, [visible.at(-1)?.id, visible.at(-1)?.seq]);
+    if (jumpToSent.current) {
+      list.current?.scrollToIndex({ index: "LAST", align: "end" });
+      jumpToSent.current = false;
+    }
+  }, [visible.at(-1)?.id]);
   const send = (quick = false) => {
     if (!quick && !text.trim()) return;
-    pinned.current = true;
+    jumpToSent.current = true;
     setError("");
     queueMessage({
       key: quick ? crypto.randomUUID() : draftKey.current, text: quick ? "现在都怎么样了？" : text.trim(),
@@ -183,117 +192,24 @@ export function Conversation({ focus }: { focus?: string }) {
       editor.current?.focus();
     }
   };
-  const replyTo = (m: Data) => { setReply(m); editor.current?.focus(); };
+  const replyTo = useCallback((m: Data) => { setReply(m); editor.current?.focus(); }, []);
+  const loadEarlier = useCallback(() => earlier.current(), []);
   return (
     <div className="conversation">
-      <div
-        className="chat-stream"
-        ref={stream}
-        onScroll={(e) => {
-          const s = e.currentTarget;
-          pinned.current = s.scrollHeight - s.clientHeight - s.scrollTop < 65;
-        }}
-      >
-        <div className="chat-column">
-          {more && (
-            <button
-              onClick={() => earlier.current()}
-            >
-              查看更早的消息
-            </button>
-          )}
-          {loaded && !visible.length && (
-            <section className="chat-empty">
-              <Loop size={30} aria-hidden="true" />
-              <h2>有什么事要我照看？</h2>
-              <p>交代一件事，或问问现有委托的进度。</p>
-            </section>
-          )}
-          {offline && <p role="status">暂时连不上工作台，正在重连。</p>}
-          {visible.map((m, index) => (
-            <React.Fragment key={m.approvalGoal ? "approval:" + m.approvalGoal : m.id}>
-              {(!index ||
-                new Date(m.created).toDateString() !==
-                  new Date(visible[index - 1].created).toDateString()) && (
-                <div className="day-stamp">
-                  <time>
-                    {new Date(m.created).toLocaleDateString("zh-CN", {
-                      month: "long",
-                      day: "numeric",
-                      weekday: "long",
-                    })}
-                  </time>
-                </div>
-              )}
-              {m.approvalGoal ? <ChatApprovals message={m} reply={() => replyTo(m)} /> : <article className={"chat-message " + m.role}>
-                <div className="meta">
-                  <b>
-                    {m.role === "user"
-                      ? "你"
-                      : m.kind === "reminder"
-                        ? "提醒"
-                        : m.kind === "history"
-                          ? "以往交付"
-                          : "Continuum"}
-                  </b>
-                  <time dateTime={m.created}>
-                    {new Date(m.created).toLocaleTimeString("zh-CN", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      hour12: false,
-                    })}
-                  </time>
-                  {m.delivery && <span role="status">
-                    {{queued: "等待发送", sending: "发送中…", sent: "已发送", failed: "发送未确认"}[m.delivery as string]}
-                  </span>}
-                </div>
-                {m.body.length > 800 ? (
-                  <div className="long-message">
-                    <div className="excerpt"><Markdown text={m.body.split(/\n\s*\n/)[0].slice(0, 360)} /></div>
-                    <details className="read-more">
-                      <summary>阅读全文</summary>
-                      <Markdown text={m.body} />
-                    </details>
-                  </div>
-                ) : (
-                  <Markdown text={m.body} />
-                )}
-                {m.delivery === "failed" && <div className="links">
-                  <span role="alert">{m.error}</span>
-                  <button onClick={() => retryMessage(m.id)}>重试发送</button>
-                </div>}
-                {m.kind === "project" && !m.resolvedBy && settings && (
-                  <ProjectQuestion
-                    message={m}
-                    projects={settings.workspaces}
-                    canChooseFolder={settings.service.canChooseFolder}
-                    onResolved={() => resolved(m.id)}
-                  />
-                )}
-                {m.kind === "directory" && (
-                  <>
-                    <p>
-                      原项目目录 <code>{m.directoryPath}</code>
-                    </p>
-                    {m.directoryResolvedAt || m.resolvedBy ? (
-                      <small>目录已确认</small>
-                    ) : (
-                      !!m.canRecover && (
-                        <DirectoryQuestion
-                          message={m}
-                          canChooseFolder={!!settings?.service.canChooseFolder}
-                          onResolved={() => resolved(m.id)}
-                        />
-                      )
-                    )}
-                  </>
-                )}
-                {m.role === "assistant" && <MessageLinks message={m} reply={() => replyTo(m)} />}
-              </article>}
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
+      <React.Suspense fallback={<div className="chat-stream" />}>
+        <ChatHistory
+          list={list}
+          rows={visible}
+          firstIndex={firstIndex}
+          settings={settings}
+          loaded={loaded}
+          more={more}
+          offline={offline}
+          earlier={loadEarlier}
+          replyTo={replyTo}
+          resolved={resolved}
+        />
+      </React.Suspense>
       <form
         className="main-composer"
         onSubmit={(e) => {
@@ -377,182 +293,5 @@ export function Conversation({ focus }: { focus?: string }) {
         </div>
       </form>
     </div>
-  );
-}
-
-function MessageLinks({
-  message: m,
-  reply,
-}: {
-  message: Data;
-  reply: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const run = m.origin?.startsWith("run:") && m.origin.slice(4);
-  const inbox = m.origin?.startsWith("inbox:") && m.origin.slice(6);
-  const canReply = m.refs.length > 0 || (m.kind === "project" && !m.resolvedBy);
-  if (!inbox && !canReply && !run) return null;
-  return (
-    <footer>
-      <div className="links message-links">
-        {inbox && <a href={"#inbox/" + inbox}>查看请求</a>}
-        {canReply && (
-          <button onClick={reply}>
-            <CornerUpLeft size={14} />
-            回复这条
-          </button>
-        )}
-        {(m.refs.length > 0 || run) && (
-          <button
-            aria-expanded={open}
-            aria-controls={"sources-" + m.id}
-            onClick={() => setOpen(!open)}
-          >
-            <Link2 size={14} />
-            关联记录 <ChevronDown size={12} className="disclosure-arrow" />
-          </button>
-        )}
-      </div>
-      <div className="chat-sources" id={"sources-" + m.id} hidden={!open}>
-        {m.refs.map((g: Data) => (
-          <a key={g.id} href={"#goal/" + g.id}>
-            <span>委托</span>
-            <strong>{g.title}</strong>
-            <ArrowUpRight size={14} />
-          </a>
-        ))}
-        {run && (
-          <a href={"#run/" + run}>
-            <span>运行</span>
-            <strong>查看依据</strong>
-            <ArrowUpRight size={14} />
-          </a>
-        )}
-      </div>
-    </footer>
-  );
-}
-
-function DirectoryQuestion({
-  message,
-  canChooseFolder,
-  onResolved,
-}: {
-  message: Data;
-  canChooseFolder: boolean;
-  onResolved: () => Promise<void>;
-}) {
-  const [moving, setMoving] = useState(false);
-  return (
-    <Form
-      onSubmit={async (form) => {
-        await api(
-          "/conversation/directories/" + message.id,
-          moving ? { path: field(form, "path") } : {},
-        );
-        await onResolved();
-      }}
-    >
-      {moving && <ProjectFolder canChoose={canChooseFolder} />}
-      <button>{moving ? "确认新位置并继续" : "原目录已恢复，继续"}</button>
-      <button type="button" onClick={() => setMoving(!moving)}>
-        {moving ? "返回" : "更换这项委托的目录"}
-      </button>
-    </Form>
-  );
-}
-
-function ProjectQuestion({
-  message,
-  projects,
-  canChooseFolder,
-  onResolved,
-}: {
-  message: Data;
-  projects: Data[];
-  canChooseFolder: boolean;
-  onResolved: () => Promise<void>;
-}) {
-  const matching = projects.filter(
-    (p) => p.name.toLowerCase() === message.project?.toLowerCase(),
-  );
-  const [selection, select] = useState(
-    matching.length === 1
-      ? matching[0].id
-      : projects.length && (matching.length || message.project === "?")
-        ? ""
-        : "new",
-  );
-  const selected = projects.find((p) => p.id === selection);
-  return (
-    <Form
-      onSubmit={async (f) => {
-        const decision =
-          selection === "new"
-            ? {
-                kind: "authorize",
-                path: field(f, "path"),
-                name: field(f, "name") || undefined,
-              }
-            : selection === "independent"
-              ? { kind: "independent" }
-              : selection === "cancel"
-                ? { kind: "cancel" }
-                : {
-                    kind: "select",
-                    workspaceId: selection,
-                    enable: selected?.enabled === 0,
-                  };
-        await api("/conversation/projects/" + message.id, decision);
-        await onResolved();
-      }}
-    >
-      <label>
-        这项委托使用的项目
-        <select
-          value={selection}
-          onChange={(e) => select(e.target.value)}
-          required
-        >
-          <option value="" disabled>
-            请选择项目
-          </option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} · {p.path}
-              {p.enabled ? "" : "（已停用）"}
-            </option>
-          ))}
-          <option value="independent">作为独立委托处理</option>
-          <option value="new">授权新的本地项目…</option>
-          <option value="cancel">取消这项委托</option>
-        </select>
-      </label>
-      {selection === "new" && (
-        <>
-          <label>
-            项目名称
-            <input
-              name="name"
-              maxLength={160}
-              defaultValue={message.project === "?" ? "" : message.project}
-            />
-          </label>
-          <ProjectFolder canChoose={canChooseFolder} />
-          <small>授权后，以后提到这个项目即可使用。</small>
-        </>
-      )}
-      <button disabled={!selection}>
-        {selection === "new"
-          ? "授权并继续"
-          : selection === "independent"
-            ? "独立执行"
-            : selection === "cancel"
-              ? "确认取消"
-              : selected && !selected.enabled
-                ? "重新启用并继续"
-                : "使用这个项目"}
-      </button>
-    </Form>
   );
 }

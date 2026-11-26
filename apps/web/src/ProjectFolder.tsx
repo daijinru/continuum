@@ -1,8 +1,9 @@
 import React, { useState } from "react";
+import { useRowState } from "./chat-row-state.ts";
 import { api } from "./lib.tsx";
 
 export function ProjectFolder({ canChoose }: { canChoose: boolean }) {
-  const [path, setPath] = useState("");
+  const [path, setPath] = useRowState("folder-path", "");
   const [choosing, setChoosing] = useState(false);
   const [error, setError] = useState("");
   return (

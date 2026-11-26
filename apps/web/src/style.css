@@ -1107,7 +1107,6 @@ dialog::backdrop {
 }
 .read-more > summary { color: var(--muted); font-size: .86rem; }
 .read-more[open] > summary { margin-bottom: 6px; }
-.long-message:has(> details[open]) > .excerpt { display: none; }
 .section-disclosure {
   border-block-start: 1px solid var(--rule);
   padding-block: 10px;
@@ -1212,6 +1211,9 @@ dialog::backdrop {
 .chat-column {
   padding-block: 16px;
 }
+.chat-column.chat-row { display: flow-root; padding-block: 0; }
+.chat-history-head { padding-block: 16px 0; }
+.chat-history-foot { height: 16px; }
 .day-stamp {
   display: flex;
   align-items: center;
@@ -1233,7 +1235,7 @@ dialog::backdrop {
   padding: 12px 0;
   overflow-wrap: anywhere;
 }
-.chat-message.assistant + .chat-message.assistant {
+.chat-row.divided .chat-message.assistant {
   border-top: 1px solid var(--line);
 }
 .chat-message.user {

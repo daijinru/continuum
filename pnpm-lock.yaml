@@ -63,6 +63,9 @@ importers:
       react-markdown:
         specifier: '10'
         version: 10.1.0(@types/react@19.2.2)(react@19.2.0)
+      react-virtuoso:
+        specifier: '4'
+        version: 4.18.24(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       remark-gfm:
         specifier: '4'
         version: 4.0.1
@@ -1235,6 +1238,12 @@ packages:
     peerDependencies:
       '@types/react': '>=18'
       react: '>=18'
+
+  react-virtuoso@4.18.24:
+    resolution: {integrity: sha512-vZsE3qrSrDMkGCv/xoFR0HvkdAYP7WFlZHRH9+uELwtSDM4PLNrPefusgEW7MepcHmwYnrHCdMth2EuJXI/0KA==}
+    peerDependencies:
+      react: '>=16 || >=17 || >= 18 || >= 19'
+      react-dom: '>=16 || >=17 || >= 18 || >=19'
 
   react@19.2.0:
     resolution: {integrity: sha512-tmbWg6W31tQLeB5cdIBOicJDJRR2KzXsV7uSK9iNfLWQ5bIZfxuPEHp7M8wiHyHnn0DD1i7w3Zmin0FtkrwoCQ==}
@@ -2845,6 +2854,11 @@ snapshots:
       vfile: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  react-virtuoso@4.18.24(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
+    dependencies:
+      react: 19.2.0
+      react-dom: 19.2.0(react@19.2.0)
 
   react@19.2.0: {}
 
