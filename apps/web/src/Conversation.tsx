@@ -29,6 +29,13 @@ export function Conversation({ focus }: { focus?: string }) {
         (a, b) => a.seq - b.seq,
       ),
     );
+  const resolved = async (id: string) => {
+    const rows = await api("/conversation");
+    setMessages((old) =>
+      old.map((row) => (row.id === id ? { ...row, resolvedBy: true } : row)),
+    );
+    merge(rows);
+  };
   useEffect(() => {
     let alive = true,
       fetching = false,
@@ -205,16 +212,26 @@ export function Conversation({ focus }: { focus?: string }) {
                     message={m}
                     projects={settings.workspaces}
                     canChooseFolder={settings.service.canChooseFolder}
-                    onResolved={async () => {
-                      const rows = await api("/conversation");
-                      setMessages((old) =>
-                        old.map((row) =>
-                          row.id === m.id ? { ...row, resolvedBy: true } : row,
-                        ),
-                      );
-                      merge(rows);
-                    }}
+                    onResolved={() => resolved(m.id)}
                   />
+                )}
+                {m.kind === "directory" && (
+                  <>
+                    <p>
+                      原项目目录 <code>{m.directoryPath}</code>
+                    </p>
+                    {m.directoryResolvedAt || m.resolvedBy ? (
+                      <small>目录已确认</small>
+                    ) : (
+                      !!m.canRecover && (
+                        <DirectoryQuestion
+                          message={m}
+                          canChooseFolder={!!settings?.service.canChooseFolder}
+                          onResolved={() => resolved(m.id)}
+                        />
+                      )
+                    )}
+                  </>
                 )}
                 {m.role === "assistant" && (
                   <div className="links">
@@ -340,6 +357,35 @@ export function Conversation({ focus }: { focus?: string }) {
         </div>
       </form>
     </div>
+  );
+}
+
+function DirectoryQuestion({
+  message,
+  canChooseFolder,
+  onResolved,
+}: {
+  message: Data;
+  canChooseFolder: boolean;
+  onResolved: () => Promise<void>;
+}) {
+  const [moving, setMoving] = useState(false);
+  return (
+    <Form
+      onSubmit={async (form) => {
+        await api(
+          "/conversation/directories/" + message.id,
+          moving ? { path: field(form, "path") } : {},
+        );
+        await onResolved();
+      }}
+    >
+      {moving && <ProjectFolder canChoose={canChooseFolder} />}
+      <button>{moving ? "确认新位置并继续" : "原目录已恢复，继续"}</button>
+      <button type="button" onClick={() => setMoving(!moving)}>
+        {moving ? "返回" : "更换这项委托的目录"}
+      </button>
+    </Form>
   );
 }
 

@@ -139,6 +139,13 @@ export async function createServer(
   post("/conversation/projects/:id", ({ id, body }) =>
     conversation.resolveProject(id, projectDecision.parse(body)),
   );
+  post("/conversation/directories/:id", ({ id, body }) => {
+    const { path } = z
+      .object({ path: z.string().trim().min(1).max(4000).optional() })
+      .strict()
+      .parse(body);
+    return conversation.resolveDirectory(id, path);
+  });
   const processes = processSampler(() => s.adapters.codex.processRoots?.() ?? new Map());
   get("/system/monitor", async () => ({
     ...await processes(),
@@ -210,7 +217,7 @@ export async function createServer(
   });
   get("/goals", ({ q }) =>
     db.all(
-      "SELECT g.*,w.name workspace,CASE WHEN g.state='blocked' THEN 'blocked' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.category='risk' AND st.verification='disputed') THEN 'at_risk' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.verification='verified') THEN 'on_track' ELSE 'unknown' END health,(SELECT count(*) FROM inbox_items i WHERE i.goal_id=g.id AND i.status IN('pending','deferred')) pending,(SELECT status FROM agent_runs r WHERE r.goal_id=g.id ORDER BY created DESC LIMIT 1) latest FROM goals g JOIN workspaces w ON w.id=g.workspace_id ORDER BY g.updated DESC LIMIT ? OFFSET ?",
+      "SELECT g.*,w.name workspace,CASE WHEN g.state='blocked' OR (g.state='active' AND EXISTS(SELECT 1 FROM directory_holds h WHERE h.goal_id=g.id AND h.resolved_at IS NULL)) THEN 'blocked' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.category='risk' AND st.verification='disputed') THEN 'at_risk' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.verification='verified') THEN 'on_track' ELSE 'unknown' END health,(SELECT count(*) FROM inbox_items i WHERE i.goal_id=g.id AND i.status IN('pending','deferred')) pending,(SELECT status FROM agent_runs r WHERE r.goal_id=g.id ORDER BY created DESC LIMIT 1) latest FROM goals g JOIN workspaces w ON w.id=g.workspace_id ORDER BY g.updated DESC LIMIT ? OFFSET ?",
       page(q),
       offset(q),
     ),

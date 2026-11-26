@@ -90,13 +90,15 @@ export function monitorTasks(
   const rows = db.all(`
     WITH queued AS (SELECT DISTINCT goal_id FROM user_messages WHERE status IN('queued','dispatching')),
     schedules AS (SELECT goal_id, MIN(next_at) next_at FROM schedule_jobs WHERE state='enabled' GROUP BY goal_id)
-    SELECT g.id,g.title,g.state,g.provider,r.id runId,r.status, q.goal_id queued,
+    SELECT g.id,g.title,CASE WHEN g.state='active' AND h.notice_id IS NOT NULL THEN 'blocked' ELSE g.state END state,
+      g.provider,r.id runId,r.status, q.goal_id queued,
       COALESCE(t.next_at, j.next_at) nextAt
     FROM goals g
     LEFT JOIN agent_runs r ON r.goal_id=g.id AND r.finished IS NULL
     LEFT JOIN main_tasks t ON t.goal_id=g.id
     LEFT JOIN schedules j ON j.goal_id=g.id
     LEFT JOIN queued q ON q.goal_id=g.id
+    LEFT JOIN directory_holds h ON h.goal_id=g.id AND h.resolved_at IS NULL
     WHERE g.state IN('active','paused','blocked') OR r.id IS NOT NULL OR t.mode='trending'
     ORDER BY g.updated DESC`);
   return rows

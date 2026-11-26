@@ -1,6 +1,15 @@
 import { z } from "zod";
+import { post } from "./main-messages.ts";
+import { pendingDirectory, releaseDirectory } from "./directory-recovery.ts";
 import { execMeter } from "./usage.ts";
-import { now, uid, Problem, type Row, type Store } from "./db.ts";
+import {
+  DirectoryUnavailable,
+  now,
+  uid,
+  Problem,
+  type Row,
+  type Store,
+} from "./db.ts";
 import type { Service } from "./service.ts";
 import {
   action,
@@ -9,6 +18,7 @@ import {
   type Interpret,
 } from "./main-model.ts";
 import { redact } from "../../../packages/agent-core/src/index.ts";
+export { post } from "./main-messages.ts";
 
 export const sendInput = z
   .object({
@@ -46,38 +56,16 @@ export const stamp = (date: string) =>
     minute: "2-digit",
     hour12: false,
   });
-export function post(
-  db: Store,
-  role: "assistant" | "user",
-  kind: string,
-  body: string,
-  ids: string[],
-  origin: string,
-  reply: string | null = null,
-  id: string = uid(),
-) {
-  const created = db.run(
-    "INSERT INTO main_messages(id,role,kind,body,reply_to,origin,created) VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin) DO NOTHING",
-    id,
-    role,
-    kind,
-    body,
-    reply,
-    origin,
-    now(),
-  );
-  if (!created.changes)
-    return db.must("SELECT id FROM main_messages WHERE origin=?", origin)
-      .id as string;
-  for (const goal of new Set(ids))
-    db.run("INSERT INTO main_refs VALUES(?,?)", id, goal);
-  return id;
-}
 export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER): Row[] {
   return db
     .all(
-      `SELECT m.*, json_extract(q.intent,'$.project') project, q.resolved_by resolvedBy,coalesce((SELECT json_group_array(json_object('id',g.id,'title',g.title)) FROM goals g JOIN main_refs r ON r.goal_id=g.id WHERE r.message_id=m.id),'[]') refs
-    FROM main_messages m LEFT JOIN main_project_questions q ON q.message_id=m.id WHERE seq<? ORDER BY seq DESC LIMIT 80`,
+      `SELECT m.*, json_extract(q.intent,'$.project') project, coalesce(q.resolved_by,h.resolved_by) resolvedBy,
+      h.resolved_at directoryResolvedAt,
+      w.path directoryPath, (g.state='active' AND w.enabled=1) canRecover,
+      coalesce((SELECT json_group_array(json_object('id',g.id,'title',g.title)) FROM goals g JOIN main_refs r ON r.goal_id=g.id WHERE r.message_id=m.id),'[]') refs
+    FROM main_messages m LEFT JOIN main_project_questions q ON q.message_id=m.id
+    LEFT JOIN directory_holds h ON h.notice_id=m.id LEFT JOIN workspaces w ON w.id=h.workspace_id
+    LEFT JOIN goals g ON g.id=h.goal_id WHERE m.seq<? ORDER BY m.seq DESC LIMIT 80`,
       before,
     )
     .reverse()
@@ -160,6 +148,20 @@ const labels: Record<string, string> = {
   blocked: "受阻",
 };
 export function progress(db: Store, g: Row) {
+  const hold = pendingDirectory(db, g.id);
+  if (hold) {
+    const enabled = db.must(
+      "SELECT enabled FROM workspaces WHERE id=?",
+      g.workspace_id,
+    ).enabled;
+    const next =
+      g.state !== "active"
+        ? labels[g.state] || g.state
+        : !enabled
+          ? "项目已停用，需要先在设置中重新启用"
+          : "恢复原目录后会自动继续，也可以在主对话的提醒里确认新位置";
+    return `${g.title}：本次工作尚未开始，${hold.reason}。${next}。`;
+  }
   const t = db.one("SELECT * FROM main_tasks WHERE goal_id=?", g.id);
   const r = db.one(
     "SELECT * FROM agent_runs WHERE goal_id=? ORDER BY created DESC,rowid DESC LIMIT 1",
@@ -183,6 +185,16 @@ export function progress(db: Store, g: Row) {
     facts.push(
       t.succeeded ? "最近成功读取 " + stamp(t.succeeded) : "尚无成功读取记录",
     );
+  } else if (
+    g.state === "active" &&
+    !disabled &&
+    (!r || r.finished) &&
+    db.one(
+      "SELECT 1 FROM user_messages WHERE goal_id=? AND status IN ('queued','dispatching')",
+      g.id,
+    )
+  ) {
+    facts.push("本次工作已排队，等待开始");
   } else if (r) {
     facts.push(labels[r.status] || r.status);
     const e = db.one(
@@ -298,6 +310,47 @@ export class MainConversation {
       return { id: user };
     });
   }
+  resolveDirectory(id: string, path?: string, reply?: Send) {
+    const { db } = this.s;
+    return db.tx(() => {
+      const hold = db.must(
+        "SELECT * FROM directory_holds WHERE notice_id=?",
+        id,
+      );
+      if (hold.resolved_at) {
+        if (path && path !== hold.replacement_path)
+          throw new Problem("这次目录变更已处理，请查看当前委托。", 409);
+        if (!reply) return { id: hold.resolved_by ?? id };
+      }
+      const refs = [hold.goal_id];
+      const key = reply?.key ?? uid();
+      const user = post(
+        db,
+        "user",
+        "message",
+        reply
+          ? redact(reply.text)
+          : path
+            ? `为这项委托确认新位置：${path}`
+            : "原目录已恢复，继续",
+        refs,
+        "in:" + key,
+        reply ? (reply.replyTo ?? null) : id,
+        key,
+      );
+      let answer: string;
+      try {
+        answer = hold.resolved_at
+          ? `这次目录问题已处理。${progress(db, this.s.goal(hold.goal_id))}`
+          : releaseDirectory(db, hold, user, path);
+      } catch (e) {
+        if (!reply || path || !(e instanceof DirectoryUnavailable)) throw e;
+        answer = `${e.message}，本次工作仍在等原目录恢复。也可以在提醒里确认新位置。`;
+      }
+      post(db, "assistant", "ack", answer, refs, "ack:" + user, user);
+      return { id: user };
+    });
+  }
   async handle(b: Send) {
     const { db } = this.s,
       text = redact(b.text);
@@ -311,8 +364,9 @@ export class MainConversation {
         throw new Problem("消息编号冲突", 409);
       return { id: b.key };
     }
-    if (b.replyTo)
-      db.must("SELECT id FROM main_messages WHERE id=?", b.replyTo);
+    const reply = b.replyTo
+      ? db.must("SELECT * FROM main_messages WHERE id=?", b.replyTo)
+      : undefined;
     if (b.focus) this.s.goal(b.focus);
     // A bare project name can answer the last request only when it has a
     // single open question. Explicit replies also work after other messages.
@@ -352,11 +406,12 @@ export class MainConversation {
         throw new Problem("请在这条问题下确认项目，或回复已启用的项目名称。");
     }
     const goals = db.all(
-      "SELECT id,title,state,updated FROM goals ORDER BY updated DESC",
+      `SELECT g.id,g.title,g.state,g.updated,h.notice_id directoryNotice FROM goals g
+       LEFT JOIN directory_holds h ON h.goal_id=g.id AND h.resolved_at IS NULL ORDER BY g.updated DESC`,
     );
     const recent = db
       .all(
-        "SELECT id,role,kind,substr(body,1,400) body,created FROM main_messages WHERE kind IN('message','ack','question','status','answer') ORDER BY seq DESC LIMIT 8",
+        "SELECT id,role,kind,substr(body,1,400) body,created FROM main_messages WHERE kind IN('message','ack','question','status','answer','directory') ORDER BY seq DESC LIMIT 8",
       )
       .reverse();
     const last = recent.at(-1);
@@ -371,11 +426,61 @@ export class MainConversation {
         ? bound[0]
         : !b.replyTo &&
             fresh &&
-            last.kind === "ack" &&
+            (last.kind === "ack" || last.kind === "directory") &&
             refs(last.id).length === 1
           ? refs(last.id)[0]
           : "";
     const instant = new Date();
+    // Accept a replacement path only from an explicit reply to its notice.
+    // Model output cannot choose a new filesystem location.
+    const newLocation =
+      reply?.kind === "directory" &&
+      /^(?:请)?(?:改用|确认新位置(?:为|是)?)\s*[:：]?\s*(\/[^\n]+)$/.exec(
+        b.text,
+      );
+    if (newLocation && reply)
+      return this.resolveDirectory(reply.id, newLocation[1].trim(), b);
+    let directoryChoices: Row[] = [];
+    if (
+      /^(?:请|那就|现在)?(?:(?:原)?目录(?:已恢复|恢复了)[，, ]*)?(?:继续(?:执行|工作|吧)?|接着做)[。！!\s]*$/.test(
+        text,
+      )
+    ) {
+      if (reply?.kind === "directory")
+        return this.resolveDirectory(reply.id, undefined, b);
+      // A directed reply or a recent exchange about one goal has a known
+      // target. With several outstanding notices, a bare “continue” needs a name.
+      const recentTargets =
+        fresh && last.kind !== "directory" ? refs(last.id) : [];
+      const targets =
+        b.replyTo || b.focus
+          ? bound
+          : recentTargets.length === 1
+            ? recentTargets
+            : null;
+      const candidates = goals.filter(
+        (g) => g.state === "active" && (!targets || targets.includes(g.id)),
+      );
+      directoryChoices = candidates.filter((g) => g.directoryNotice);
+      if (directoryChoices.length === 1)
+        return this.resolveDirectory(
+          directoryChoices[0].directoryNotice,
+          undefined,
+          b,
+        );
+      if (!directoryChoices.length) {
+        if (!targets && fresh && last.kind === "directory")
+          return this.resolveDirectory(last.id, undefined, b);
+        if (candidates.length === 1) {
+          const prior = db.one(
+            "SELECT notice_id FROM directory_holds WHERE goal_id=? AND resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT 1",
+            candidates[0].id,
+          );
+          if (prior)
+            return this.resolveDirectory(prior.notice_id, undefined, b);
+        }
+      }
+    }
     const generic =
       /^(?:那|现在|目前|最近|都|总体|全部|这些委托|进度|任务|我的委托|请问|了|呢|的|如何|情况|怎么样|到哪一步|安排好了吗|进展|有什么|怎样|[？?！!。\s])+$/;
     const statusTitle = text
@@ -395,7 +500,18 @@ export class MainConversation {
             /GitHub.*Trending|热榜/i.test(g.title)),
       );
     let actions: Intent[];
-    if (named && named.length === 1)
+    if (directoryChoices.length > 1)
+      actions = [
+        {
+          type: "clarify",
+          target: "",
+          at: "",
+          cadence: "once",
+          notify: "always",
+          text: `这几项委托都在等目录恢复：${directoryChoices.map((h) => `「${h.title}」`).join("、")}。请回复要继续的那条目录提醒。`,
+        },
+      ];
+    else if (named && named.length === 1)
       actions = [
         {
           type: "status",
@@ -445,12 +561,7 @@ export class MainConversation {
             .map(({ name, enabled }) => ({ name, enabled: !!enabled })),
           replyTargets: bound,
           recentFocus: focus,
-          replyText: b.replyTo
-            ? db.must(
-                "SELECT substr(body,1,400) body FROM main_messages WHERE id=?",
-                b.replyTo,
-              ).body
-            : null,
+          replyText: reply?.body.slice(0, 400) ?? null,
           recent: recent.map((m) => ({
             role: m.role,
             text: m.body,
@@ -572,6 +683,33 @@ export class MainConversation {
         const g = this.s.goal(a.target);
         links.push(g.id);
         const t = db.one("SELECT * FROM main_tasks WHERE goal_id=?", g.id);
+        if (
+          g.state === "active" &&
+          (a.type === "resume" || a.type === "rerun")
+        ) {
+          const atRequest = goals.find(
+            (goal) => goal.id === g.id,
+          )?.directoryNotice;
+          const hold = atRequest
+            ? db.must(
+                "SELECT * FROM directory_holds WHERE notice_id=?",
+                atRequest,
+              )
+            : pendingDirectory(db, g.id);
+          if (hold) {
+            if (hold.resolved_at) {
+              answers.push(progress(db, g));
+              continue;
+            }
+            try {
+              answers.push(releaseDirectory(db, hold, user));
+            } catch (e) {
+              if (!(e instanceof Problem)) throw e;
+              answers.push(progress(db, g));
+            }
+            continue;
+          }
+        }
         if (a.type === "pause" || a.type === "stop" || a.type === "resume") {
           if (["archived", "completed"].includes(g.state))
             throw new Problem("这项委托已经结束。");

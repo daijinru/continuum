@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { Store, now, uid, Problem, type Row } from "./db.ts";
+import { DirectoryUnavailable, Store, now, uid, Problem, type Row } from "./db.ts";
+import { holdDirectory, pendingDirectory } from "./directory-recovery.ts";
 import { recordUsage } from "./usage.ts";
 import { reportRun, post } from "./main-conversation.ts";
 import {
@@ -54,8 +55,11 @@ export class Service {
     return JSON.parse(this.db.must("SELECT * FROM settings").config);
   }
   createGoal(input: GoalInput) {
+    this.db.allowed(input.workspaceId);
+    return this.insertGoal(input);
+  }
+  private insertGoal(input: GoalInput) {
     const g = goalInput.parse(input);
-    this.db.allowed(g.workspaceId);
     const id = uid();
     this.db.run(
       "INSERT INTO goals VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -102,7 +106,10 @@ export class Service {
       if (realpathSync(root) !== root) throw new Problem("委托目录已改变");
       workspaceId = this.db.workspace(mkdtempSync(join(root, "task-")), undefined, false).id;
     }
-    const g = this.createGoal({
+    // The queue retains work for an enabled project even if its folder moved
+    // before intake. Dispatch checks the actual location before starting.
+    this.db.enabledWorkspace(workspaceId!);
+    const g = this.insertGoal({
       title: request.split(/\n/)[0].slice(0, 80),
       description: request,
       criteria: ["按原始要求交付可直接使用的结果"],
@@ -178,7 +185,6 @@ export class Service {
       )
     )
       throw new Problem("该委托由工作台直接处理，不启动 Codex。");
-    db.allowed(goal.workspace_id);
     if (goal.state !== "active") throw new Problem("请先将目标恢复为进行中");
     if (
       db.one(
@@ -187,6 +193,9 @@ export class Service {
       )
     )
       throw new Problem("该目标已有运行或需要核对的任务", 409);
+    if (pendingDirectory(db, goal.id))
+      throw new Problem("请先在主对话中确认这项委托的项目目录。", 409);
+    db.allowed(goal.workspace_id);
     const id = uid(),
       stamp = now();
     db.run(
@@ -210,7 +219,7 @@ export class Service {
     key: string,
     instruction?: string,
     continuation = false,
-    sourceRun?: string,
+    origin: "request" | "queue" | "schedule" = "request",
   ) {
     const db = this.db,
       goal = this.goal(goalId);
@@ -220,15 +229,29 @@ export class Service {
       key,
     );
     if (existing) return existing;
-    const previous = sourceRun
+    const message =
+      origin === "schedule"
+        ? undefined
+        : db.one(
+            "SELECT goal_id,content,source_run FROM user_messages WHERE id=?",
+            key,
+          );
+    const request = instruction || "执行目标并报告证据";
+    if (
+      origin === "request" &&
+      message &&
+      (message.goal_id !== goalId || message.content !== redact(request))
+    )
+      throw new Problem("提交编号已用于其他指令", 409);
+    const previous = message?.source_run
       ? db.one(
-          "SELECT thread_id FROM agent_runs WHERE goal_id=? AND id=?",
+          "SELECT id,thread_id FROM agent_runs WHERE goal_id=? AND id=?",
           goalId,
-          sourceRun,
+          message.source_run,
         )
       : continuation
         ? db.one(
-            "SELECT thread_id FROM agent_runs WHERE goal_id=? AND thread_id IS NOT NULL ORDER BY created DESC LIMIT 1",
+            "SELECT id,thread_id FROM agent_runs WHERE goal_id=? AND thread_id IS NOT NULL ORDER BY created DESC LIMIT 1",
             goalId,
           )
         : null;
@@ -240,13 +263,40 @@ export class Service {
       ...JSON.parse(goal.criteria),
       "约束",
       ...JSON.parse(goal.constraints_json),
-      instruction || "执行目标并报告证据",
+      request,
     ].join("\n");
-    const run = db.tx(() =>
-      this.reserve(goal, key, prompt, previous?.thread_id || null),
-    );
+    let run: Row, context: Context;
     try {
-      await this.adapters[goal.provider].start(this.context(run));
+      ({ run, context } = db.tx(() => {
+        const run = this.reserve(
+          goal,
+          key,
+          prompt,
+          previous?.thread_id || null,
+        );
+        return { run, context: this.context(run) };
+      }));
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) {
+        db.tx(() => {
+          // Direct starts have no outbox or schedule to come back to.
+          if (origin === "request" && !message)
+            db.run(
+              "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status,source_run) VALUES(?,?,'goal',?,?,?,'queued',?)",
+              key,
+              goal.id,
+              goal.id,
+              redact(request),
+              now(),
+              previous?.id ?? null,
+            );
+          holdDirectory(db, goal, e.message);
+        });
+      }
+      throw e;
+    }
+    try {
+      await this.adapters[goal.provider].start(context);
     } catch (e) {
       const current = this.run(run.id);
       this.event(run.id, {
