@@ -2,6 +2,8 @@
 
 在一个主对话里交代事情、询问进度、接收结果。每项委托有自己的排期和偏好；你不用打开多个聊天室，也不用盯着执行日志。
 
+想了解一句话如何变成几项委托、每轮结果又如何回到这段对话，可以看[主会话与委托架构图](docs/architecture.md#主对话与委托)。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="design-demos/macos/workbench-dark.png">
   <img src="design-demos/macos/workbench-desktop.png" alt="Continuum 石墨灰主对话：窄侧栏、结果与来源、固定输入区">
