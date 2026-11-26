@@ -140,6 +140,10 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
         (await decide(row(id).id, "approve_run")).statusCode,
         200,
       );
+      assert.notEqual(
+        (await decide(row(id).id, "approve_goal")).statusCode,
+        200,
+      );
     }
     assert.equal(row(101, other.id).status, "pending");
     assert.equal(row(102, other.id).status, "pending");

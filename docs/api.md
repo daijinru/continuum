@@ -23,6 +23,8 @@
 
 当待处理审批返回 `allow_for_run: 1` 时，可提交 `decision: "approve_run"`。它批准当前请求，并允许同一轮 Codex 执行中符合条件的待批命令和文件修改。每次答复都会重新检查项目授权。额外权限和补充信息继续单独询问。自动批准的决策记录用 `actor: "run_grant"` 标记，记录详情中的 `grant` 指向用户最初批准的请求。运行结束、断线或工作台重启后授权失效。
 
+同一类待处理审批也接受 `decision: "approve_goal"`。这会把授权保存在本机，只用于这项委托在当前项目中的常规操作，后续手动或定时运行均可沿用。暂停期间不自动批准。结束委托、更换项目或停用项目会取消委托授权。自动批准记为 `actor: "goal_grant"`，详情中的 `grant` 指向原始审批。委托详情 `GET /goals/:id` 返回 `approvalGrant`（原审批 ID 或 null）。向 `POST /goals/:id/revoke-approval` 提交 `{"grant":"原审批 ID"}` 可撤销它。
+
 列表通常接受 limit 和 offset。活动列表可按 goalId、runId、provider、severity、type、search 过滤。活动不带 cursor 时逆序，带 cursor 时返回该序号以后的事件并升序排列。故事证据支持 until，以便重现历史快照。
 
 实时流的 change 消息使用 SQLite 序号作为 SSE id，data 含事件和目标标识。首次连接可传 cursor，自动重连优先读取 Last-Event-ID。需要完整数据时通过活动和证据接口查询。心跳为 SSE 注释。

@@ -237,6 +237,16 @@ export function Goal({ id }: { id: string }) {
         </select>
       </Head>
       <TokenUsage label="本项委托的 token 用量" usage={g.usage} />
+      {g.approvalGrant && (
+        <div className="actions">
+          <span>这项委托各轮的常规操作已获授权。</span>
+          <a href={"#inbox/" + g.approvalGrant}>查看原始授权</a>
+          <Action run={async () => {
+            await api("/goals/" + id + "/revoke-approval", { grant: g.approvalGrant });
+            notice("已撤销委托授权，后续操作将重新询问");
+          }}>撤销委托授权</Action>
+        </div>
+      )}
       <div className="goal-controls">
         {g.arrangement && (
           <p>
