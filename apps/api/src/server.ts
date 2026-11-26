@@ -261,6 +261,7 @@ export async function createServer(
   get("/goals/:id", ({ id }) => ({
     ...s.goal(id),
     approvalGrant: s.goalGrant(id),
+    maskedCommandGrant: s.maskedCommandGrant(id),
     usage: goalUsage(db, id),
     arrangement:
       db.one(
@@ -444,6 +445,8 @@ export async function createServer(
     ),
   }));
   post("/inbox/:id/decision", ({ id, body }) => s.decide(id, body));
+  post("/inbox/:id/review", ({ id, body }) =>
+    s.reviewCommand(id, z.object({ version: z.number().int().positive() }).strict().parse(body).version));
   get("/activity", ({ q }) => {
     const clauses = ["e.seq>?"],
       args: (string | number)[] = [offset({ offset: q.cursor })];

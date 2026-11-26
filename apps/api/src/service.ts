@@ -370,7 +370,7 @@ export class Service {
       if (e.approval && !r.finished && r.status !== "unknown") {
         const a = e.approval;
         db.run(
-          "INSERT OR IGNORE INTO inbox_items(id,goal_id,run_id,request_id,status,title,action,reason,scope,risk,created,expires,kind,blocking,allow_for_run) VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?)",
+          "INSERT OR IGNORE INTO inbox_items(id,goal_id,run_id,request_id,status,title,action,reason,scope,risk,created,expires,kind,blocking,allow_for_run,masked_command) VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?,?)",
           uid(),
           r.goal_id,
           id,
@@ -386,7 +386,16 @@ export class Service {
             : new Date(Date.now() + 3600000).toISOString(),
           a.kind || "approval",
           a.blocking === false ? 0 : 1,
-          Number(!!a.allowForRun && r.provider === "codex" && (a.kind ?? "approval") === "approval"),
+          Number(
+            !!a.allowForRun &&
+              r.provider === "codex" &&
+              (a.kind ?? "approval") === "approval",
+          ),
+          Number(
+            !!a.maskedCommand &&
+              r.provider === "codex" &&
+              (a.kind ?? "approval") === "approval",
+          ),
         );
       }
       if (e.type === "provider.request_closed")
@@ -451,7 +460,7 @@ export class Service {
           id,
           e.approval.id,
         );
-        if (item?.status === "pending" && !(item.allow_for_run && this.approvalGrant(item)))
+        if (item?.status === "pending" && !this.approvalGrant(item))
           this.askAbout(item);
       }
       return event;
@@ -481,9 +490,27 @@ export class Service {
     );
   }
   goalGrant(goalId: string): string | null {
-    return this.db.one("SELECT source FROM active_goal_approval_grants WHERE goal_id=?", goalId)?.source ?? null;
+    return (
+      this.db.one(
+        "SELECT source FROM active_goal_approval_grants WHERE goal_id=?",
+        goalId,
+      )?.source ?? null
+    );
+  }
+  maskedCommandGrant(goalId: string): string | null {
+    return (
+      this.db.one(
+        "SELECT source FROM active_masked_command_grants WHERE goal_id=?",
+        goalId,
+      )?.source ?? null
+    );
   }
   private approvalGrant(item: Row): ApprovalGrant | undefined {
+    if (item.masked_command) {
+      const source = this.maskedCommandGrant(item.goal_id);
+      return source ? { source, actor: "goal_grant" } : undefined;
+    }
+    if (!item.allow_for_run) return;
     const source = this.goalGrant(item.goal_id);
     if (source) return { source, actor: "goal_grant" };
     const run = this.runGrants.get(item.run_id);
@@ -507,9 +534,9 @@ export class Service {
   }
   async applyApprovalGrants() {
     const pending = this.db.all(
-      `SELECT i.id,i.goal_id,i.run_id,i.version,
+      `SELECT i.id,i.goal_id,i.run_id,i.version,i.allow_for_run,i.masked_command,
         EXISTS(SELECT 1 FROM main_messages WHERE origin='inbox:'||i.id) asked
-       FROM inbox_items i WHERE i.status='pending' AND i.allow_for_run=1 ORDER BY i.created,i.rowid`,
+       FROM inbox_items i WHERE i.status='pending' AND (i.allow_for_run=1 OR i.masked_command=1) ORDER BY i.created,i.rowid`,
     );
     for (const item of pending) {
       if (this.deciding.has(item.id)) continue;
@@ -529,6 +556,29 @@ export class Service {
           !this.db.one("SELECT 1 FROM main_messages WHERE origin=?", "inbox:" + current.id))
         this.db.tx(() => this.askAbout(current));
     }
+  }
+  reviewCommand(id: string, version: number) {
+    const item = this.inbox(id),
+      run = this.run(item.run_id),
+      goal = this.goal(item.goal_id);
+    if (
+      !item.masked_command ||
+      !["pending", "deferred"].includes(item.status) ||
+      item.version !== version ||
+      (item.expires && item.expires <= now()) ||
+      run.finished ||
+      run.status === "unknown" ||
+      item.scope !== this.db.allowed(goal.workspace_id) ||
+      goal.state !== "active"
+    )
+      throw new Problem("这条命令已无法核对，请刷新审批页", 409);
+    const review = this.adapters[run.provider].reviewCommand?.(
+      run.id,
+      item.request_id,
+      version,
+    );
+    if (!review) throw new Problem("原请求已失效或目录已改变", 409);
+    return review;
   }
   async decide(id: string, body: unknown, grant?: ApprovalGrant) {
     const d = decisionInput.parse(body),
@@ -583,20 +633,49 @@ export class Service {
       const workspace = db.allowed(goal.workspace_id);
       if (item.risk.includes("仅可拒绝"))
         throw new Problem("无法完整显示请求范围");
+      if (item.masked_command && !grant) {
+        if (
+          d.decision === "approve_run" ||
+          !d.reviewKey ||
+          this.reviewCommand(id, d.version).reviewKey !== d.reviewKey
+        )
+          throw new Problem("请先在本机查看这条完整命令", 409);
+      }
       if (d.decision !== "approve" || grant) {
         if (
-          !item.allow_for_run || item.scope !== workspace || goal.state !== "active" ||
-          run.finished || run.status === "unknown" || (grant && this.approvalGrant(item)?.source !== grant.source)
+          !(item.allow_for_run || item.masked_command) ||
+          item.scope !== workspace ||
+          goal.state !== "active" ||
+          run.finished ||
+          run.status === "unknown" ||
+          (grant && this.approvalGrant(item)?.source !== grant.source)
         )
           throw new Problem("这项请求当前不能使用持续授权。", 409);
       }
       // Reserve the original scope before yielding to the provider. A project
       // switch or withdrawal during the reply must not recreate consent.
-      if (d.decision === "approve_goal" && !this.goalGrant(goal.id)) {
-        const saved = db.run("INSERT INTO goal_approval_grants(goal_id,workspace_id,source) VALUES(?,?,?) ON CONFLICT(goal_id) DO NOTHING",
-          goal.id, goal.workspace_id, id);
-        if (!saved.changes) throw new Problem("这项委托的授权正在处理，请稍后重试。", 409);
-      }
+      if (d.decision === "approve_goal")
+        db.tx(() => {
+          if (!this.goalGrant(goal.id)) {
+            const saved = db.run(
+              "INSERT INTO goal_approval_grants(goal_id,workspace_id,source) VALUES(?,?,?) ON CONFLICT(goal_id) DO NOTHING",
+              goal.id,
+              goal.workspace_id,
+              id,
+            );
+            if (!saved.changes)
+              throw new Problem("这项委托的授权正在处理，请稍后重试。", 409);
+          }
+          if (item.masked_command && !this.maskedCommandGrant(goal.id)) {
+            const saved = db.run(
+              "INSERT INTO masked_command_grants(goal_id,source) VALUES(?,?) ON CONFLICT(goal_id) DO NOTHING",
+              goal.id,
+              id,
+            );
+            if (!saved.changes)
+              throw new Problem("这项委托的授权正在处理，请稍后重试。", 409);
+          }
+        });
     }
     this.deciding.add(id);
     try {
@@ -610,10 +689,21 @@ export class Service {
           if (d.decision === "answer") {
             if (!adapter.answer) throw Error("unsupported_capability");
             await adapter.answer(run.id, item.request_id, d.answers!);
-          } else await adapter.respond(run.id, item.request_id, approving ? "approve" : "deny");
+          } else
+            await adapter.respond(
+              run.id,
+              item.request_id,
+              approving ? "approve" : "deny",
+              !!item.masked_command && approving,
+            );
         } catch (error) {
           if (error instanceof ApprovalScopeChanged) {
-            db.run("UPDATE inbox_items SET allow_for_run=0,risk=?,version=version+1 WHERE id=? AND status IN " + open, error.message, id);
+            db.run(
+              "UPDATE inbox_items SET allow_for_run=0,masked_command=0,risk=?,version=version+1 WHERE id=? AND status IN " +
+                open,
+              error.message,
+              id,
+            );
             throw new Problem(error.message, 409);
           }
           this.expire(item);
@@ -686,8 +776,18 @@ export class Service {
       });
       return this.inbox(id);
     } finally {
-      if (d.decision === "approve_goal")
-        db.run("DELETE FROM goal_approval_grants WHERE source=? AND NOT EXISTS(SELECT 1 FROM active_goal_approval_grants WHERE source=?)", id, id);
+      if (d.decision === "approve_goal") {
+        db.run(
+          "DELETE FROM masked_command_grants WHERE source=? AND NOT EXISTS(SELECT 1 FROM active_masked_command_grants WHERE source=?)",
+          id,
+          id,
+        );
+        db.run(
+          "DELETE FROM goal_approval_grants WHERE source=? AND NOT EXISTS(SELECT 1 FROM active_goal_approval_grants WHERE source=?)",
+          id,
+          id,
+        );
+      }
       this.deciding.delete(id);
     }
   }
@@ -721,7 +821,12 @@ export class Service {
   }
   async recover() {
     const db = this.db;
-    db.run("DELETE FROM goal_approval_grants WHERE source NOT IN (SELECT source FROM active_goal_approval_grants)");
+    db.run(
+      "DELETE FROM goal_approval_grants WHERE source NOT IN (SELECT source FROM active_goal_approval_grants)",
+    );
+    db.run(
+      "DELETE FROM masked_command_grants WHERE source NOT IN (SELECT source FROM active_masked_command_grants)",
+    );
     for (const r of db.all("SELECT * FROM agent_runs WHERE finished IS NULL")) {
       if (
         r.provider === "demo" &&

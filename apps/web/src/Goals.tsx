@@ -241,6 +241,7 @@ export function Goal({ id }: { id: string }) {
         <div className="actions">
           <span>这项委托各轮的常规操作已获授权。</span>
           <a href={"#inbox/" + g.approvalGrant}>查看原始授权</a>
+          {g.maskedCommandGrant && <a href={"#inbox/" + g.maskedCommandGrant}>已授权预览被遮盖的常规命令</a>}
           <Action run={async () => {
             await api("/goals/" + id + "/revoke-approval", { grant: g.approvalGrant });
             notice("已撤销委托授权，后续操作将重新询问");

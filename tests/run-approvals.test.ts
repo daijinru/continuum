@@ -21,12 +21,7 @@ async function until(ready: () => boolean) {
   assert.ok(ready());
 }
 
-test("本轮授权经真实审批协议逐条答复，区分普通操作、额外授权、陈旧范围和其他运行", async () => {
-  const root = mkdtempSync(join(tmpdir(), "continuum-grant-"));
-  const project = join(root, "project"),
-    oldPath = process.env.PATH;
-  mkdirSync(project);
-  mkdirSync(join(project, "sub"));
+function installCodex(root: string) {
   writeFileSync(
     join(root, "codex"),
     `#!${process.execPath}
@@ -44,7 +39,7 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
   if (id === undefined) return;
   if (!method) {
     fs.appendFileSync("responses",id+" "+result.decision+"\\n");
-    if (id === 101) {
+    if (id === 101 && !fs.existsSync("review-scenario")) {
       command(103,{command:"ls"});
       file(104,"notes.txt");
       file(105,"sub/moved.txt");
@@ -56,12 +51,31 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
     const turn={id:"turn",status:"inProgress"};
     send({method:"turn/started",params:{threadId:"thread",turn}});
     send({id,result:{turn}});
-    command(101); command(102);
+    command(101);
+    if (fs.existsSync("review-scenario")) {
+      const masked = {command:"echo token=demo-review-fixture"};
+      command(102,masked);
+      command(103,{command:"re.sub(r'Bearer [^ ]+', 'hidden', line)"});
+      command(104,masked);
+      command(105,{...masked,additionalPermissions:{network:{enabled:true}}});
+      command(106,{...masked,cwd:"/"}); command(107,{...masked,kind:"subcommand"});
+      command(108,{...masked,availableDecisions:["decline"]});
+      command(109,{...masked,cwd:process.cwd()+"/sub"});
+    } else command(102);
   } else send({id,result:{account:{},thread:{id:"thread"}}});
 });
 `,
     { mode: 0o700 },
   );
+}
+
+test("本轮授权经真实审批协议逐条答复，区分普通操作、额外授权、陈旧范围和其他运行", async () => {
+  const root = mkdtempSync(join(tmpdir(), "continuum-grant-"));
+  const project = join(root, "project"),
+    oldPath = process.env.PATH;
+  mkdirSync(project);
+  mkdirSync(join(project, "sub"));
+  installCodex(root);
   process.env.PATH = root + ":" + oldPath;
   const { app, s, db, token, worker } = await createServer({
     home: join(root, "db"),
@@ -162,6 +176,167 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
     assert.equal(row(102, next.id).status, "pending");
   } finally {
     await app.close();
+    process.env.PATH = oldPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("在本机查看原文后按委托授权遮盖命令，跨重启生效且原文不进入历史", async () => {
+  const root = mkdtempSync(join(tmpdir(), "continuum-command-review-"));
+  const project = join(root, "project"),
+    oldPath = process.env.PATH;
+  mkdirSync(project);
+  mkdirSync(join(project, "sub"));
+  installCodex(root);
+  writeFileSync(join(project, "review-scenario"), "");
+  process.env.PATH = root + ":" + oldPath;
+  const options = { home: join(root, "db"), seed: false, worker: false };
+  let api = await createServer(options);
+  try {
+    const workspace = api.db.workspace(project);
+    const goal = () =>
+      api.s.createGoal({
+        title: "检查示例",
+        description: "审批测试",
+        workspaceId: workspace.id,
+        provider: "codex",
+        priority: 3,
+        criteria: ["记录结果"],
+        constraints: [],
+      });
+    const first = goal(),
+      second = goal();
+    const start = async (id: string) => {
+      const run = await api.s.start(id, uid());
+      const rows = () =>
+        api.db.all(
+          "SELECT * FROM inbox_items WHERE run_id=? ORDER BY request_id",
+          run.id,
+        );
+      await until(() => rows().length === 9);
+      return { run, rows: rows() };
+    };
+    const post = (url: string, payload: object, auth = true) =>
+      api.app.inject({
+        method: "POST",
+        url: "/api/v1/inbox/" + url,
+        headers: auth ? { "x-continuum-token": api.token } : {},
+        payload,
+      });
+    const decide = (id: string, decision: string, reviewKey?: string) =>
+      post(id + "/decision", { decision, reviewKey, key: uid(), version: 1 });
+    const review = (id: string, auth = true) =>
+      post(id + "/review", { version: 1 }, auth);
+    const { run, rows } = await start(first.id);
+    const [plain, once, source, next, ...excluded] = rows;
+    assert.equal((await decide(plain.id, "approve_goal")).statusCode, 200);
+    await api.worker.tick();
+    assert.equal(api.s.inbox(once.id).status, "pending");
+    assert.equal(once.masked_command, 1);
+    assert.equal(once.allow_for_run, 0);
+    assert.equal((await review(once.id, false)).statusCode, 403);
+    assert.equal((await decide(once.id, "approve_goal")).statusCode, 409);
+    const preview = await review(once.id);
+    assert.equal(preview.headers["cache-control"], "no-store");
+    const raw = preview.json().data;
+    assert.equal(raw.command, "echo token=demo-review-fixture");
+    assert.equal(raw.cwd, workspace.path);
+    assert.equal(
+      (await decide(source.id, "approve_goal", raw.reviewKey)).statusCode,
+      409,
+    );
+    assert.equal(
+      (await decide(once.id, "approve_run", raw.reviewKey)).statusCode,
+      409,
+    );
+    assert.equal((await decide(once.id, "defer")).statusCode, 200);
+    const oneTime = (reviewKey: string) =>
+      post(once.id + "/decision", {
+        decision: "approve",
+        key: uid(),
+        version: 2,
+        reviewKey,
+      });
+    assert.equal((await oneTime(raw.reviewKey)).statusCode, 409);
+    const refreshed = await post(once.id + "/review", { version: 2 });
+    assert.equal(
+      (await oneTime(refreshed.json().data.reviewKey)).statusCode,
+      200,
+    );
+    assert.equal(api.s.maskedCommandGrant(first.id), null);
+    assert.equal((await review(once.id)).statusCode, 409);
+    const inspected = (await review(source.id)).json().data;
+    assert.equal(
+      (await decide(source.id, "approve_goal", inspected.reviewKey)).statusCode,
+      200,
+    );
+    renameSync(join(project, "sub"), join(root, "moved"));
+    symlinkSync(join(root, "moved"), join(project, "sub"));
+    await api.worker.tick();
+    assert.equal(api.s.inbox(next.id).status, "approved");
+    for (const row of excluded) {
+      assert.equal(api.s.inbox(row.id).status, "pending");
+      assert.notEqual((await review(row.id)).statusCode, 200);
+      assert.notEqual(
+        (await decide(row.id, "approve_goal", inspected.reviewKey)).statusCode,
+        200,
+      );
+    }
+    const record = await api.app.inject("/api/v1/inbox/" + source.id);
+    assert.ok(record.body.includes("已隐藏"));
+    for (const path of [
+      "/inbox",
+      "/inbox/" + source.id,
+      "/activity",
+      "/conversation",
+    ]) {
+      const res = await api.app.inject("/api/v1" + path);
+      assert.equal(res.statusCode, 200);
+      assert.ok(
+        !res.body.includes("demo-review-fixture") &&
+          !res.body.includes(inspected.reviewKey),
+      );
+    }
+    api.s.event(run.id, { key: "end", type: "run.completed", title: "完成" });
+    await api.app.close();
+    api = await createServer(options);
+    const later = await start(first.id),
+      other = await start(second.id);
+    await api.worker.tick();
+    assert.equal(api.s.inbox(later.rows[1].id).status, "approved");
+    assert.equal(api.s.inbox(other.rows[1].id).status, "pending");
+    const audit = api.db.must(
+      "SELECT actor,detail FROM audit_log WHERE target=?",
+      later.rows[1].id,
+    );
+    assert.equal(audit.actor, "goal_grant");
+    assert.equal(JSON.parse(audit.detail).grant, source.id);
+    api.s.revokeGoalGrant(first.id, plain.id);
+    assert.equal(api.s.maskedCommandGrant(first.id), null);
+    api.s.event(later.run.id, {
+      key: "end",
+      type: "run.completed",
+      title: "完成",
+    });
+    const after = await start(first.id);
+    await api.worker.tick();
+    assert.equal(api.s.inbox(after.rows[1].id).status, "pending");
+    // A newly created grant can include masked commands from its first approval.
+    const request = after.rows[1].id;
+    assert.equal(
+      (
+        await decide(
+          request,
+          "approve_goal",
+          (await review(request)).json().data.reviewKey,
+        )
+      ).statusCode,
+      200,
+    );
+    assert.equal(api.s.goalGrant(first.id), request);
+    assert.equal(api.s.maskedCommandGrant(first.id), request);
+  } finally {
+    await api.app.close();
     process.env.PATH = oldPath;
     rmSync(root, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ type Request = {
   reason?: string;
   risk?: string;
   provider?: string;
+  masked_command?: number;
 };
 type Copy = {
   title: string;
@@ -29,6 +30,12 @@ export function decisionCopy(item: Request): Copy {
     return { ...base, title: "这项委托需要你补充信息", facts: [] };
   if (item.kind === "decision")
     return { ...base, title: "请核对这次任务实际有没有完成", facts: [raw] };
+  if (item.masked_command)
+    return {
+      ...base,
+      title: "这条命令的预览隐藏了部分内容",
+      facts: [],
+    };
   if (item.risk?.includes("仅可拒绝"))
     return {
       ...base,

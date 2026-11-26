@@ -112,3 +112,64 @@ test("在待处理审批授予跨轮权限，能从委托详情撤销", async ({
     0,
   );
 });
+
+test("遮盖命令在本机展开原文后可按委托授权，处理历史仅展示预览", async ({
+  page,
+  request,
+}) => {
+  const sample = (await (await request.get("/api/v1/inbox")).json()).data[0];
+  const command = "echo token=ui-review-fixture",
+    reviewKey = "71000000-0000-4000-8000-000000000002";
+  let approved = false,
+    reviews = 0;
+  const item = () => ({
+    ...sample,
+    provider: "codex",
+    kind: "approval",
+    allow_for_run: 0,
+    masked_command: 1,
+    action: "echo token=[已隐藏]",
+    risk: "命令预览已隐藏部分内容",
+    version: approved ? 2 : 1,
+    status: approved ? "approved" : "pending",
+  });
+  await page.route("**/api/v1/inbox", (r) =>
+    r.fulfill({ json: { data: [item()] } }),
+  );
+  const path = "**/api/v1/inbox/" + sample.id;
+  await page.route(path, (r) =>
+    r.fulfill({ json: { data: { ...item(), audit: [] } } }),
+  );
+  await page.route(path + "/review", (r) => {
+    reviews++;
+    expect(r.request().method()).toBe("POST");
+    expect(r.request().postDataJSON()).toEqual({ version: 1 });
+    return r.fulfill({
+      json: { data: { command, cwd: "/project", reviewKey } },
+    });
+  });
+  await page.route(path + "/decision", (r) => {
+    expect(r.request().postDataJSON()).toMatchObject({
+      decision: "approve_goal",
+      version: 1,
+      reviewKey,
+    });
+    approved = true;
+    return r.fulfill({ json: { data: item() } });
+  });
+  await page.goto("/#inbox/" + sample.id);
+  const grant = page.getByRole("button", { name: "按委托授权", exact: true });
+  await expect(grant).toBeDisabled();
+  expect(reviews).toBe(0);
+  await page.getByRole("button", { name: "在本机查看完整命令" }).click();
+  await expect(page.getByText(command, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "隐藏原文" }).click();
+  await expect(grant).toBeDisabled();
+  await page.getByRole("button", { name: "在本机查看完整命令" }).click();
+  await grant.click();
+  await expect(grant).toHaveCount(0);
+  await expect(page.getByText(command, { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "在本机查看完整命令" }),
+  ).toHaveCount(0);
+});
