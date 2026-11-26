@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Continuum · 主会话与委托</title>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      margin-bottom: 2rem;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      background: #22d3ee;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      margin-left: 1.75rem;
+    }
+
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 900px;
+      display: block;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+
+    .card {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 0.75rem;
+      border: 1px solid #1e293b;
+      padding: 1.25rem;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .card-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+
+    .card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .card ul {
+      list-style: none;
+      color: #94a3b8;
+      font-size: 0.75rem;
+    }
+
+    .card li {
+      margin-bottom: 0.375rem;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      color: #475569;
+      font-size: 0.75rem;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 0.5rem;
+      margin-left: auto;
+      flex-shrink: 0;
+      align-items: center;
+    }
+    .toolbar-toggle {
+      background: transparent;
+      border: none;
+      color: #475569;
+      cursor: pointer;
+      font-size: 1.25rem;
+      line-height: 1;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions {
+      display: none;
+      gap: 0.5rem;
+    }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid #334155;
+      color: #94a3b8;
+      padding: 0.375rem 0.75rem;
+      border-radius: 0.375rem;
+      font-family: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .toolbar-actions button:hover {
+      background: rgba(51, 65, 85, 0.8);
+      color: white;
+      border-color: #475569;
+    }
+
+    @media print {
+      body { background: #020617; padding: 1rem; }
+      .toolbar { display: none !important; }
+    }
+
+    body { font-family: "JetBrains Mono", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .container { max-width: 1120px; }
+    .header { margin-bottom: 1.25rem; }
+    .subtitle { font-size: 1rem; line-height: 1.65; }
+    .diagram-container { padding: .5rem; }
+    .cards { margin-top: 1rem; }
+    .card h3 { font-size: 1rem; }
+    .card p { font-size: .9rem; line-height: 1.7; color: #cbd5e1; }
+    .footer { color: #94a3b8; }
+    svg { min-width: 800px; }
+    @media (max-width: 700px) { body { padding: .75rem; } .header-row { flex-wrap: wrap; } }
+    @media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>主会话与委托</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">复制图片</button>
+            <button onclick="downloadPNG(this)">下载 PNG</button>
+            <button onclick="downloadPDF(this)">下载 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="导出架构图" aria-label="导出架构图">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">“在项目甲排查更新问题，周五提醒我准备周会。”</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1064 714" role="img" aria-labelledby="map-title map-desc">
+  <style>
+    .node text { fill: #cbd5e1; font-size: 14px; }
+    .node .title { fill: #f8fafc; font-size: 20px; font-weight: 600; }
+  </style>
+  <title id="map-title">从主会话发出指令，到各项委托分别交付</title>
+  <desc id="map-desc">查进度直接读记录。需要执行的工作先归属到委托，再依类型派发。审批与结果关联原委托，经变更通知回到同一个主会话。</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M28 0H0V28" fill="none" stroke="#1e293b" stroke-width=".65"/></pattern>
+    <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#94a3b8"/></marker>
+  </defs>
+  <rect width="1064" height="714" fill="#0b1220"/>
+  <rect width="1064" height="714" fill="url(#grid)"/>
+  <g class="connections" fill="none" stroke="#94a3b8" stroke-width="1.7" marker-end="url(#tip)">
+    <path d="M380 105V154"/>
+    <path d="M694 198H748"/>
+    <path d="M883 154V67H695"/>
+    <path d="M380 240V289"/>
+    <path d="M380 378V407H199V436"/>
+    <path d="M380 407H538V436"/>
+    <path d="M538 407H883V436"/>
+    <path d="M199 538V604"/>
+    <path d="M538 538V604"/>
+    <path d="M883 538V604"/>
+    <path d="M70 649H29V67H69"/>
+  </g>
+  <path d="M694 333H748" fill="none" stroke="#fb7185" stroke-width="1.7" stroke-dasharray="5 5"/>
+
+  <g class="node">
+    <rect x="70" y="27" width="624" height="78" rx="8" fill="#102d39" stroke="#22d3ee"/>
+    <text x="90" y="58" class="title">主会话</text>
+    <text x="90" y="84">交代新任务、追问进度，或回复一条已有的交付。</text>
+  </g>
+  <g class="node">
+    <rect x="70" y="155" width="624" height="85" rx="8" fill="#112c29" stroke="#34d399"/>
+    <text x="90" y="187" class="title">判断这句话要做什么</text>
+    <text x="90" y="215">结合回复对象与委托记录。归属有歧义时，回到主会话询问。</text>
+  </g>
+  <g class="node">
+    <rect x="749" y="155" width="275" height="85" rx="8" fill="#1c293b" stroke="#94a3b8"/>
+    <text x="769" y="187" class="title">问进度</text>
+    <text x="769" y="215">读取已有记录，直接答复。</text>
+  </g>
+  <g class="node">
+    <rect x="70" y="290" width="624" height="88" rx="8" fill="#28213d" stroke="#a78bfa"/>
+    <text x="90" y="322" class="title">建立或更新委托 · Goal</text>
+    <text x="90" y="352">一条消息可关联多项委托。每项分别保存要求、状态与排期。</text>
+  </g>
+  <g class="node">
+    <rect x="749" y="282" width="275" height="104" rx="8" fill="#321f2d" stroke="#fb7185" stroke-dasharray="5 4"/>
+    <text x="769" y="313" class="title">工作目录与操作授权</text>
+    <text x="769" y="341">项目确定工作位置。委托授权</text>
+    <text x="769" y="363">仅适用于该委托在当前项目的操作。</text>
+  </g>
+  <g class="node">
+    <rect x="70" y="437" width="278" height="101" rx="8" fill="#112c29" stroke="#34d399"/>
+    <text x="90" y="469" class="title">普通工作</text>
+    <text x="90" y="497">工作入队，执行器按轮运行。</text>
+    <text x="90" y="519">每条 AgentRun 属于一项委托。</text>
+  </g>
+  <g class="node">
+    <rect x="398" y="437" width="278" height="101" rx="8" fill="#112c29" stroke="#34d399"/>
+    <text x="418" y="469" class="title">到点提醒</text>
+    <text x="418" y="497">调度器到点写入提醒。</text>
+    <text x="418" y="519">这条路径无需启动 Codex。</text>
+  </g>
+  <g class="node">
+    <rect x="727" y="437" width="297" height="101" rx="8" fill="#112c29" stroke="#34d399"/>
+    <text x="747" y="469" class="title">持续关注 GitHub 热榜</text>
+    <text x="747" y="497">保存本次观察，按约定交付。</text>
+    <text x="747" y="519">无新发现时可以只记录检查结果。</text>
+  </g>
+  <g class="node">
+    <rect x="70" y="605" width="954" height="86" rx="8" fill="#28213d" stroke="#a78bfa"/>
+    <text x="90" y="637" class="title">写入 SQLite，按委托回到主会话</text>
+    <text x="90" y="665">需要用户看的审批、结果或提醒会关联原委托。服务通知页面有变化，页面再补读变更的消息。</text>
+  </g>
+</svg>
+    </div>
+
+    <div class="cards">
+      <article class="card"><div class="card-header"><span class="card-dot cyan"></span><h3>回复会回到哪件事？</h3></div><p>在排查结果下回复“只看正式版”，服务沿这条消息找到排查委托。周五的提醒仍有自己的排期。</p></article>
+      <article class="card"><div class="card-header"><span class="card-dot rose"></span><h3>一次授权能管几轮？</h3></div><p>对排查委托选择按委托授权后，后续各轮符合条件的常规命令和文件修改可沿用。其他委托单独审批，需要额外权限时仍会询问。</p></article>
+      <article class="card"><div class="card-header"><span class="card-dot violet"></span><h3>项目目录移走了怎么办？</h3></div><p>排查还没开始就发现目录失效时，主会话提醒一次。恢复原目录或确认新位置后沿用原执行键，避免重复派发。</p></article>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      Continuum · 本地委托工作台
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '已复制';
+      } catch (e) {
+        btn.textContent = '导出失败';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'continuum-architecture.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '已导出';
+      } catch (e) {
+        btn.textContent = '导出失败';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('continuum-architecture.pdf');
+        btn.textContent = '已导出';
+      } catch (e) {
+        btn.textContent = '导出失败';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>
