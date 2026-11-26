@@ -31,6 +31,7 @@ import {
 } from "../../../packages/contracts/src/index.ts";
 
 const open = "('pending','deferred')";
+type ApprovalGrant = { source: string; actor: "goal_grant" | "run_grant" };
 export class Service {
   db: Store;
   bus = new EventEmitter();
@@ -450,7 +451,7 @@ export class Service {
           id,
           e.approval.id,
         );
-        if (item?.status === "pending" && !(item.allow_for_run && this.runGrants.has(id)))
+        if (item?.status === "pending" && !(item.allow_for_run && this.approvalGrant(item)))
           this.askAbout(item);
       }
       return event;
@@ -479,29 +480,57 @@ export class Service {
       [item.goal_id], "inbox:" + item.id,
     );
   }
-  async applyRunApprovals() {
-    for (const [runId, grant] of this.runGrants) {
-      const pending = this.db.all(
-        "SELECT id,version FROM inbox_items WHERE run_id=? AND status='pending' AND allow_for_run=1 ORDER BY created,rowid",
-        runId,
-      );
-      for (const item of pending) {
-        if (this.deciding.has(item.id)) continue;
+  goalGrant(goalId: string): string | null {
+    return this.db.one("SELECT source FROM active_goal_approval_grants WHERE goal_id=?", goalId)?.source ?? null;
+  }
+  private approvalGrant(item: Row): ApprovalGrant | undefined {
+    const source = this.goalGrant(item.goal_id);
+    if (source) return { source, actor: "goal_grant" };
+    const run = this.runGrants.get(item.run_id);
+    if (run) return { source: run, actor: "run_grant" };
+  }
+  revokeGoalGrant(goalId: string, source: string) {
+    const db = this.db;
+    this.goal(goalId);
+    return db.tx(() => {
+      const current = db.one("SELECT source FROM goal_approval_grants WHERE goal_id=?", goalId)?.source;
+      if (current && current !== source) throw new Problem("委托授权已更换，请刷新后重试。", 409);
+      if (current) {
+        db.run("DELETE FROM goal_approval_grants WHERE goal_id=? AND source=?", goalId, source);
+        db.run("INSERT INTO audit_log(actor,action,target,detail,created) VALUES('user','revoke_goal',?,?,?)",
+          source, JSON.stringify({ goal: goalId }), now());
+        const live = db.one("SELECT id FROM agent_runs WHERE goal_id=? AND finished IS NULL", goalId);
+        if (live) this.runGrants.delete(live.id);
+      }
+      return { id: goalId };
+    });
+  }
+  async applyApprovalGrants() {
+    const pending = this.db.all(
+      `SELECT i.id,i.goal_id,i.run_id,i.version,
+        EXISTS(SELECT 1 FROM main_messages WHERE origin='inbox:'||i.id) asked
+       FROM inbox_items i WHERE i.status='pending' AND i.allow_for_run=1 ORDER BY i.created,i.rowid`,
+    );
+    for (const item of pending) {
+      if (this.deciding.has(item.id)) continue;
+      const grant = this.approvalGrant(item);
+      if (!grant && item.asked) continue;
+      if (grant) {
         try {
           await this.decide(item.id, { decision: "approve", key: uid(), version: item.version }, grant);
+          continue;
         } catch (e) {
           if (!(e instanceof Problem)) throw e;
-          const current = this.inbox(item.id);
-          if (
-            current.status === "pending" &&
-            !this.db.one("SELECT 1 FROM main_messages WHERE origin=?", "inbox:" + current.id)
-          )
-            this.db.tx(() => this.askAbout(current));
         }
       }
+      // A grant may have been revoked after suppressing this question.
+      const current = this.inbox(item.id);
+      if (current.status === "pending" &&
+          !this.db.one("SELECT 1 FROM main_messages WHERE origin=?", "inbox:" + current.id))
+        this.db.tx(() => this.askAbout(current));
     }
   }
-  async decide(id: string, body: unknown, grant?: string) {
+  async decide(id: string, body: unknown, grant?: ApprovalGrant) {
     const d = decisionInput.parse(body),
       db = this.db,
       item = this.inbox(id),
@@ -523,7 +552,7 @@ export class Service {
     )
       throw new Problem("审批状态已变化，请刷新", 409);
     const choices: Record<string, string[]> = {
-      approval: ["approve", "approve_run", "deny", "defer"],
+      approval: ["approve", "approve_run", "approve_goal", "deny", "defer"],
       input: ["answer", "defer"],
       decision: ["record", "defer"],
     };
@@ -547,18 +576,26 @@ export class Service {
       this.expire(item);
       throw new Problem("请求已过期", 409);
     }
-    const approving = d.decision === "approve" || d.decision === "approve_run";
+    const newRunGrant = d.decision === "approve_run" && !this.goalGrant(run.goal_id);
+    const approving = d.decision === "approve" || d.decision === "approve_run" || d.decision === "approve_goal";
     if (approving) {
       const goal = this.goal(run.goal_id);
       const workspace = db.allowed(goal.workspace_id);
       if (item.risk.includes("仅可拒绝"))
         throw new Problem("无法完整显示请求范围");
-      if (d.decision === "approve_run" || grant) {
+      if (d.decision !== "approve" || grant) {
         if (
           !item.allow_for_run || item.scope !== workspace || goal.state !== "active" ||
-          run.finished || run.status === "unknown" || (grant && this.runGrants.get(run.id) !== grant)
+          run.finished || run.status === "unknown" || (grant && this.approvalGrant(item)?.source !== grant.source)
         )
-          throw new Problem("这项请求当前不能使用本轮授权。", 409);
+          throw new Problem("这项请求当前不能使用持续授权。", 409);
+      }
+      // Reserve the original scope before yielding to the provider. A project
+      // switch or withdrawal during the reply must not recreate consent.
+      if (d.decision === "approve_goal" && !this.goalGrant(goal.id)) {
+        const saved = db.run("INSERT INTO goal_approval_grants(goal_id,workspace_id,source) VALUES(?,?,?) ON CONFLICT(goal_id) DO NOTHING",
+          goal.id, goal.workspace_id, id);
+        if (!saved.changes) throw new Problem("这项委托的授权正在处理，请稍后重试。", 409);
       }
     }
     this.deciding.add(id);
@@ -590,6 +627,7 @@ export class Service {
             {
               approve: "approved",
               approve_run: "approved",
+              approve_goal: "approved",
               deny: "denied",
               defer: "deferred",
               answer: "resolved",
@@ -600,7 +638,7 @@ export class Service {
         );
         db.run(
           "INSERT INTO audit_log(actor,action,target,key,detail,created) VALUES(?,?,?,?,?,?)",
-          grant ? "run_grant" : "user",
+          grant?.actor ?? "user",
           d.decision,
           id,
           d.key,
@@ -608,14 +646,15 @@ export class Service {
             version: d.version,
             run: run.id,
             request: item.request_id,
-            grant,
+            grant: grant?.source,
             note: d.note ? redact(d.note) : undefined,
             observed: d.observed,
           }),
           now(),
         );
       });
-      if (d.decision === "approve_run") {
+      if (d.decision === "approve_goal") this.runGrants.delete(run.id);
+      if (newRunGrant && !this.goalGrant(run.goal_id)) {
         const current = this.run(run.id);
         if (!current.finished && current.status !== "unknown") this.runGrants.set(run.id, id);
       }
@@ -634,8 +673,9 @@ export class Service {
         type:
           d.decision === "defer" ? "approval.deferred" : "approval.resolved",
         title: {
-          approve: grant ? "已按本轮授权允许操作" : "已批准本次操作",
+          approve: grant?.actor === "goal_grant" ? "已按委托授权允许操作" : grant ? "已按本轮授权允许操作" : "已批准本次操作",
           approve_run: "已允许本轮后续命令和文件修改",
+          approve_goal: "已批准本次操作并选择委托授权",
           deny: "已拒绝本次操作",
           defer: "审批已稍后处理",
           answer: "已提交补充信息",
@@ -646,6 +686,8 @@ export class Service {
       });
       return this.inbox(id);
     } finally {
+      if (d.decision === "approve_goal")
+        db.run("DELETE FROM goal_approval_grants WHERE source=? AND NOT EXISTS(SELECT 1 FROM active_goal_approval_grants WHERE source=?)", id, id);
       this.deciding.delete(id);
     }
   }
@@ -679,6 +721,7 @@ export class Service {
   }
   async recover() {
     const db = this.db;
+    db.run("DELETE FROM goal_approval_grants WHERE source NOT IN (SELECT source FROM active_goal_approval_grants)");
     for (const r of db.all("SELECT * FROM agent_runs WHERE finished IS NULL")) {
       if (
         r.provider === "demo" &&

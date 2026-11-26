@@ -69,7 +69,7 @@ export class Worker {
           await s.adapters[r.provider].interrupt(r.id).catch(() => {});
       }
       checkRestoredDirectories(db);
-      await s.applyRunApprovals();
+      await s.applyApprovalGrants();
       for (const msg of db.all(
         "SELECT m.* FROM user_messages m JOIN dispatchable_goals g ON g.id=m.goal_id WHERE m.status IN('queued','dispatching') ORDER BY m.created LIMIT 20",
       )) {

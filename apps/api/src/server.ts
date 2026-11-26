@@ -260,6 +260,7 @@ export async function createServer(
   });
   get("/goals/:id", ({ id }) => ({
     ...s.goal(id),
+    approvalGrant: s.goalGrant(id),
     usage: goalUsage(db, id),
     arrangement:
       db.one(
@@ -286,6 +287,10 @@ export async function createServer(
       id,
     ),
   }));
+  post("/goals/:id/revoke-approval", ({ id, body }) => {
+    const { grant } = z.object({ grant: z.string().uuid() }).strict().parse(body);
+    return s.revokeGoalGrant(id, grant);
+  });
   route("PATCH", "/goals/:id", ({ id, body }) => {
     const b = goalInput
         .omit({ workspaceId: true, provider: true })
