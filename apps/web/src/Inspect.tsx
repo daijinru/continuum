@@ -62,6 +62,7 @@ export function Inbox({ id }: { id?: string }) {
         ].map(([k, v]) => (
           <button
             className={k === currentTab ? "selected" : ""}
+            aria-pressed={k === currentTab}
             key={k}
             onClick={() => {
               set(k);

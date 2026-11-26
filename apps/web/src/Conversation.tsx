@@ -4,7 +4,7 @@ import { api, Form, field, useData, type Data } from "./lib.tsx";
 import { ChatApprovals } from "./ChatApprovals.tsx";
 import { outgoingRow, queueMessage, reconcileOutbox, retryMessage, useOutbox } from "./conversation-outbox.ts";
 import { tokenTotal } from "./TokenUsage.tsx";
-import { ArrowUp, CornerUpLeft, Infinity as Loop, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, ChevronDown, CornerUpLeft, Infinity as Loop, Link2, X } from "lucide-react";
 import { Markdown } from "./Markdown.tsx";
 
 export function Conversation({ focus }: { focus?: string }) {
@@ -204,13 +204,13 @@ export function Conversation({ focus }: { focus?: string }) {
                   </span>}
                 </div>
                 {m.body.length > 800 ? (
-                  <>
-                    <Markdown text={m.body.split(/\n\s*\n/)[0].slice(0, 360)} />
-                    <details>
+                  <div className="long-message">
+                    <div className="excerpt"><Markdown text={m.body.split(/\n\s*\n/)[0].slice(0, 360)} /></div>
+                    <details className="read-more">
                       <summary>阅读全文</summary>
                       <Markdown text={m.body} />
                     </details>
-                  </>
+                  </div>
                 ) : (
                   <Markdown text={m.body} />
                 )}
@@ -244,36 +244,7 @@ export function Conversation({ focus }: { focus?: string }) {
                     )}
                   </>
                 )}
-                {m.role === "assistant" && (
-                  <div className="links">
-                    {m.origin?.startsWith("inbox:") && (
-                      <a href={"#inbox/" + m.origin.slice(6)}>查看请求</a>
-                    )}
-                    {(m.refs.length > 0 ||
-                      (m.kind === "project" && !m.resolvedBy)) && (
-                      <button
-                        onClick={() => replyTo(m)}
-                      >
-                        <CornerUpLeft size={13} /> 回复这条
-                      </button>
-                    )}
-                    {(m.refs.length > 0 || m.origin?.startsWith("run:")) && (
-                      <details className="chat-sources">
-                        <summary>关联记录</summary>
-                        <div>
-                          {m.refs.map((g: Data) => (
-                            <a key={g.id} href={"#goal/" + g.id}>
-                              {g.title}
-                            </a>
-                          ))}
-                          {m.origin?.startsWith("run:") && (
-                            <a href={"#run/" + m.origin.slice(4)}>查看依据</a>
-                          )}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                )}
+                {m.role === "assistant" && <MessageLinks message={m} reply={() => replyTo(m)} />}
               </article>}
             </React.Fragment>
           ))}
@@ -362,6 +333,59 @@ export function Conversation({ focus }: { focus?: string }) {
         </div>
       </form>
     </div>
+  );
+}
+
+function MessageLinks({
+  message: m,
+  reply,
+}: {
+  message: Data;
+  reply: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const run = m.origin?.startsWith("run:") && m.origin.slice(4);
+  const inbox = m.origin?.startsWith("inbox:") && m.origin.slice(6);
+  const canReply = m.refs.length > 0 || (m.kind === "project" && !m.resolvedBy);
+  if (!inbox && !canReply && !run) return null;
+  return (
+    <footer>
+      <div className="links message-links">
+        {inbox && <a href={"#inbox/" + inbox}>查看请求</a>}
+        {canReply && (
+          <button onClick={reply}>
+            <CornerUpLeft size={14} />
+            回复这条
+          </button>
+        )}
+        {(m.refs.length > 0 || run) && (
+          <button
+            aria-expanded={open}
+            aria-controls={"sources-" + m.id}
+            onClick={() => setOpen(!open)}
+          >
+            <Link2 size={14} />
+            关联记录 <ChevronDown size={12} className="disclosure-arrow" />
+          </button>
+        )}
+      </div>
+      <div className="chat-sources" id={"sources-" + m.id} hidden={!open}>
+        {m.refs.map((g: Data) => (
+          <a key={g.id} href={"#goal/" + g.id}>
+            <span>委托</span>
+            <strong>{g.title}</strong>
+            <ArrowUpRight size={14} />
+          </a>
+        ))}
+        {run && (
+          <a href={"#run/" + run}>
+            <span>运行</span>
+            <strong>查看依据</strong>
+            <ArrowUpRight size={14} />
+          </a>
+        )}
+      </div>
+    </footer>
   );
 }
 

@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import {
   Plus,
+  ChevronLeft,
+  ChevronDown,
+  ChartNoAxesColumn,
+  ShieldCheck,
+  SlidersHorizontal,
   Folder,
   Target,
   Play,
@@ -26,9 +31,14 @@ import {
   type Data,
 } from "./lib.tsx";
 import { Story } from "./Feed.tsx";
-import { TokenUsage } from "./TokenUsage.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { TokenUsage, tokenTotal } from "./TokenUsage.tsx";
 import { Delivery, Preference } from "./Commission.tsx";
+// Commissions often take their title from the first line of the original request.
+function distinctDescription(goal: Data) {
+  const text = goal.description.trim();
+  return text.startsWith(goal.title.trim()) ? "" : text;
+}
+
 function GoalForm({ close }: { close: () => void }) {
   const { data, error } = useData<Data>("/settings");
   const [path, setPath] = useState(false);
@@ -144,44 +154,46 @@ export function Goals() {
       ) : !data.length ? (
         <div className="empty">创建第一个工作目标</div>
       ) : (
-        data.map((g) => (
-          <a className="goalcard" href={"#goal/" + g.id} key={g.id}>
-            <div className="tile">
-              <Target />
-            </div>
-            <div className="grow">
-              <div className="meta">
-                <Provider value={g.provider} />
-                <span>{g.workspace}</span>
+        <div className="panel record-list">
+          {data.map((g) => (
+            <a className="goalcard" href={"#goal/" + g.id} key={g.id}>
+              <div className="tile">
+                <Target />
               </div>
-              <h2>{g.title}</h2>
-              <div className="meta">
-                {
-                  (
-                    {
-                      at_risk: "有待解决的风险",
-                      on_track: "按计划推进",
-                      blocked: "目标受阻",
-                      unknown: "等待工作证据",
-                    } as Record<string, string>
-                  )[g.health]
-                }
+              <div className="grow">
+                <div className="meta">
+                  <Provider value={g.provider} />
+                  <span>{g.workspace}</span>
+                </div>
+                <h2>{g.title}</h2>
+                <div className="meta">
+                  {
+                    (
+                      {
+                        at_risk: "有待解决的风险",
+                        on_track: "按计划推进",
+                        blocked: "目标受阻",
+                        unknown: "等待工作证据",
+                      } as Record<string, string>
+                    )[g.health]
+                  }
+                </div>
+                {distinctDescription(g) && <p>{g.description}</p>}
+                <div className="meta">
+                  {g.pending
+                    ? "等待审批 · " + g.pending + " 项"
+                    : g.latest === "failed"
+                      ? "运行失败，请检查记录"
+                      : g.latest
+                        ? "查看运行记录"
+                        : "可启动首轮任务"}{" "}
+                  · {dt(g.updated)}
+                </div>
               </div>
-              <p>{g.description}</p>
-              <div className="meta">
-                {g.pending
-                  ? "等待审批 · " + g.pending + " 项"
-                  : g.latest === "failed"
-                    ? "运行失败，请检查记录"
-                    : g.latest
-                      ? "查看运行记录"
-                      : "可启动首轮任务"}{" "}
-                · {dt(g.updated)}
-              </div>
-            </div>
-            <Badge value={g.state} />
-          </a>
-        ))
+              <Badge value={g.state} />
+            </a>
+          ))}
+        </div>
       )}
       {creating && <GoalForm close={() => set(false)} />}
     </>
@@ -194,6 +206,7 @@ export function Goal({ id }: { id: string }) {
     stories = useData("/stories?goalId=" + id);
   const [tab, setTab] = useState("概况"),
     [pref, setPref] = useState(false),
+    [manage, setManage] = useState(false),
     { chat, notice, update } = useApp();
   if (!g) return <Status error={error} />;
   const live = runs.data?.find((r) => !r.finished),
@@ -205,105 +218,177 @@ export function Goal({ id }: { id: string }) {
     });
   return (
     <>
-      <a className="back" href="#goals">
-        我的委托 / 委托详情
-      </a>
-      <Head title={g.title} sub={g.description}>
-        <Provider value={g.provider} />
-        <select
-          aria-label="目标状态"
-          value={g.state}
-          onChange={async (e) => {
-            try {
-              await api("/goals/" + id, { state: e.target.value }, "PATCH");
-              update();
-            } catch (err) {
-              notice((err as Error).message);
-            }
-          }}
-        >
-          {[
-            "active",
-            "paused",
-            "blocked",
-            "completed",
-            "archived",
-            "draft",
-          ].map((v, i) => (
-            <option key={v} value={v}>
-              {["进行中", "已暂停", "受阻", "已完成", "已归档", "草稿"][i]}
-            </option>
-          ))}
-        </select>
-      </Head>
-      <TokenUsage label="本项委托的 token 用量" usage={g.usage} />
-      {g.approvalGrant && (
-        <div className="actions">
-          <span>这项委托各轮的常规操作已获授权。</span>
-          <a href={"#inbox/" + g.approvalGrant}>查看原始授权</a>
-          {g.maskedCommandGrant && <a href={"#inbox/" + g.maskedCommandGrant}>已授权预览被遮盖的常规命令</a>}
-          <Action run={async () => {
-            await api("/goals/" + id + "/revoke-approval", { grant: g.approvalGrant });
-            notice("已撤销委托授权，后续操作将重新询问");
-          }}>撤销委托授权</Action>
+      <header className="goal-header">
+        <div className="goal-topline">
+          <a className="back" href="#goals">
+            <ChevronLeft size={15} />
+            我的委托
+          </a>
+          <div className="meta">
+            <Provider value={g.provider} />
+            <select
+              aria-label="目标状态"
+              value={g.state}
+              onChange={async (e) => {
+                try {
+                  await api("/goals/" + id, { state: e.target.value }, "PATCH");
+                  update();
+                } catch (err) {
+                  notice((err as Error).message);
+                }
+              }}
+            >
+              {[
+                "active",
+                "paused",
+                "blocked",
+                "completed",
+                "archived",
+                "draft",
+              ].map((v, i) => (
+                <option key={v} value={v}>
+                  {["进行中", "已暂停", "受阻", "已完成", "已归档", "草稿"][i]}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      )}
-      <div className="goal-controls">
-        {g.arrangement && (
-          <p>
-            {g.arrangement.mode === "reminder"
-              ? "到点提醒"
-              : g.arrangement.notify === "changes"
-                ? "有新发现再报告"
-                : "按约定交付"}{" "}
-            ·{" "}
-            {g.arrangement.next_at
-              ? `原定 ${dt(g.arrangement.next_at)}`
-              : "没有待触发的排期"}{" "}
-            {g.arrangement.last_note}
-          </p>
-        )}
-        <button onClick={() => setPref(true)}>调整委托要求</button>
-        <Action
-          className="primary"
-          disabled={
-            !!live ||
-            !isActive ||
-            (g.arrangement && g.arrangement.mode !== "work")
-          }
-          run={() => start(false)}
-        >
-          <Play size={15} />
-          开始运行
-        </Action>
-        {runs.data?.some((r) => r.thread_id) && (
-          <Action disabled={!!live || !isActive} run={() => start(true)}>
-            继续原线程
-          </Action>
-        )}
-        <Action
-          run={() =>
-            api("/goals/" + id + (isActive ? "/pause" : "/resume"), {})
-          }
-        >
-          <Pause size={14} />
-          {isActive ? "暂停新运行" : "恢复目标"}
-        </Action>
-        {live && live.status !== "unknown" && (
-          <Action run={() => api("/goals/" + id + "/interrupt", {})}>
-            <Square size={13} />
-            中断本轮
-          </Action>
-        )}
-        <button
-          onClick={() =>
-            chat({ kind: "goal", ref: id, goalId: id, title: g.title })
-          }
-        >
-          <MessageSquare size={15} />
-          跟进目标
-        </button>
-      </div>
+        <h1>{g.title}</h1>
+        {distinctDescription(g) && <p>{g.description}</p>}
+        <div className="goal-facts">
+          <span title={g.workspace.path}>
+            <Folder size={14} />
+            {g.workspace.name}
+          </span>
+          {g.arrangement?.next_at && (
+            <span>
+              <Clock3 size={14} />
+              下次 {dt(g.arrangement.next_at)}
+            </span>
+          )}
+          {g.approvalGrant && (
+            <span>
+              <ShieldCheck size={14} />
+              已按委托授权
+            </span>
+          )}
+          {g.usage.total !== null && (
+            <span>
+              <ChartNoAxesColumn size={14} />
+              {tokenTotal(g.usage)}
+            </span>
+          )}
+        </div>
+        <div className="goal-controls">
+          {live ? (
+            <a className="btn primary" href={"#run/" + live.id}>
+              查看本轮运行
+            </a>
+          ) : (
+            <Action
+              className="primary"
+              disabled={
+                !runs.data ||
+                !isActive ||
+                (g.arrangement && g.arrangement.mode !== "work")
+              }
+              run={() => start(false)}
+            >
+              <Play size={15} />
+              开始运行
+            </Action>
+          )}
+          <button
+            onClick={() =>
+              chat({ kind: "goal", ref: id, goalId: id, title: g.title })
+            }
+          >
+            <MessageSquare size={15} />
+            跟进目标
+          </button>
+          <button
+            className="manage-toggle"
+            aria-expanded={manage}
+            aria-controls="goal-management"
+            onClick={() => setManage(!manage)}
+          >
+            <SlidersHorizontal size={15} />
+            管理委托
+            <ChevronDown size={13} className="disclosure-arrow" />
+          </button>
+        </div>
+      </header>
+      <section
+        id="goal-management"
+        className="goal-management"
+        aria-label="管理委托"
+        hidden={!manage}
+      >
+        <div>
+          <h3>运行与安排</h3>
+          {g.arrangement && (
+            <p>
+              {g.arrangement.mode === "reminder"
+                ? "到点提醒"
+                : g.arrangement.notify === "changes"
+                  ? "有新发现再报告"
+                  : "按约定交付"}{" "}
+              ·{" "}
+              {g.arrangement.next_at
+                ? `原定 ${dt(g.arrangement.next_at)}`
+                : "没有待触发的排期"}{" "}
+              {g.arrangement.last_note}
+            </p>
+          )}
+
+          <div className="actions">
+            <button onClick={() => setPref(true)}>调整委托要求</button>
+            {runs.data?.some((r) => r.thread_id) && (
+              <Action disabled={!!live || !isActive} run={() => start(true)}>
+                继续原线程
+              </Action>
+            )}
+            <Action
+              run={() =>
+                api("/goals/" + id + (isActive ? "/pause" : "/resume"), {})
+              }
+            >
+              <Pause size={14} />
+              {isActive ? "暂停新运行" : "恢复目标"}
+            </Action>
+            {live && live.status !== "unknown" && (
+              <Action run={() => api("/goals/" + id + "/interrupt", {})}>
+                <Square size={13} />
+                中断本轮
+              </Action>
+            )}
+          </div>
+        </div>
+        <div>
+          <h3>用量与授权</h3>
+          <TokenUsage label="本项委托的 token 用量" usage={g.usage} />
+          {g.approvalGrant && (
+            <div className="links">
+              <a href={"#inbox/" + g.approvalGrant}>查看原始授权</a>
+              {g.maskedCommandGrant && (
+                <a href={"#inbox/" + g.maskedCommandGrant}>
+                  已授权预览被遮盖的常规命令
+                </a>
+              )}
+              <Action
+                run={async () => {
+                  await api("/goals/" + id + "/revoke-approval", {
+                    grant: g.approvalGrant,
+                  });
+                  notice("已撤销委托授权，后续操作将重新询问");
+                }}
+              >
+                撤销委托授权
+              </Action>
+            </div>
+          )}
+        </div>
+      </section>
       {pref && <Preference goalId={id} close={() => setPref(false)} />}
       <div className="tabs line">
         {["概况", "运行记录", "计划任务", "指令历史"]
@@ -312,6 +397,7 @@ export function Goal({ id }: { id: string }) {
             <button
               key={t}
               className={tab === t ? "selected" : ""}
+              aria-pressed={tab === t}
               onClick={() => setTab(t)}
             >
               {t}
@@ -322,18 +408,27 @@ export function Goal({ id }: { id: string }) {
         <>
           <section>
             <h2>历次交付</h2>
-            {g.nativeResults?.length ? (
-              g.nativeResults.map((r: Data) => (
-                <article className="panel pad" key={r.id}>
-                  <time>{dt(r.created)}</time>
-                  <Markdown text={r.body} />
-                  <a href={"#chat/" + id}>在主对话中继续</a>
-                </article>
-              ))
+            {g.nativeResults?.length || reports.data?.length ? (
+              <div className="panel record-list">
+                {g.nativeResults?.length
+                  ? g.nativeResults.map((r: Data) => (
+                      <Delivery
+                        key={r.id}
+                        inGoal
+                        r={{
+                          native: true,
+                          goal_id: id,
+                          updated: r.created,
+                          summary: r.body,
+                        }}
+                      />
+                    ))
+                  : reports.data!.map((r) => (
+                      <Delivery key={r.id} r={r} inGoal />
+                    ))}
+              </div>
             ) : !reports.data ? (
               <Status error={reports.error} />
-            ) : reports.data.length ? (
-              reports.data.map((r) => <Delivery key={r.id} r={r} />)
             ) : (
               <p>
                 {live?.status === "waiting_approval"
@@ -350,9 +445,11 @@ export function Goal({ id }: { id: string }) {
               </p>
             )}
           </section>
-          <details className="panel pad">
+          <details className="section-disclosure">
             <summary>原始要求与验收记录</summary>
-            <section className="panel pad">
+            <section>
+              {g.description.trim() !== g.title.trim() &&
+                !distinctDescription(g) && <p>{g.description}</p>}
               <h2>验收条件</h2>
               <ul className="criteria">
                 {JSON.parse(g.criteria).map((c: string, i: number) => (
@@ -388,11 +485,11 @@ export function Goal({ id }: { id: string }) {
               </div>
             </section>
           </details>
-          <details className="panel pad">
+          <details className="section-disclosure">
             <summary>工作进展与文件依据</summary>
             <section>
               <h2>工作进展</h2>
-              <div className="panel">
+              <div>
                 {stories.data?.length ? (
                   stories.data.map((st) => <Story key={st.id} s={st} />)
                 ) : (
@@ -402,7 +499,7 @@ export function Goal({ id }: { id: string }) {
             </section>
             <section>
               <h2>已核对的文件</h2>
-              <div className="panel pad">
+              <div>
                 {g.artifacts.length
                   ? g.artifacts.map((a: Data) => (
                       <p key={a.id}>

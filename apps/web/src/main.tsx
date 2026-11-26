@@ -174,7 +174,10 @@ function App() {
             </nav>
             <a className="connection" href="#monitor" aria-current={section === "monitor" ? "page" : undefined}>
               <span className={"light " + (live ? "on" : "")} />
-              {live ? "本地服务在线" : "正在连接本地服务"} · 运行监测
+              <span className="connection-copy">
+                运行监测
+                <small>{live ? "本地服务在线" : "正在连接本地服务"}</small>
+              </span>
             </a>
           </div>
         </aside>
