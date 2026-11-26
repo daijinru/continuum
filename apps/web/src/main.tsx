@@ -79,7 +79,13 @@ function App() {
       setLive(true);
       setRev((v) => v + 1);
     };
-    es.onerror = () => setLive(false);
+    es.onerror = () => {
+      setLive(false);
+      window.dispatchEvent(new Event("conversation-disconnected"));
+    };
+    es.addEventListener("conversation", e => {
+      window.dispatchEvent(new CustomEvent("conversation-changed", { detail: Number(e.data) }));
+    });
     es.addEventListener("change", (e) => {
       sessionStorage.setItem("continuum-seq", e.lastEventId);
       clearTimeout(timer);

@@ -309,3 +309,30 @@ test("同名项目先确认，停用须明确重新授权；单独回复项目�
     await api.app.close();
   }
 });
+
+test("断线后的消息按变化顺序补齐，多批回放和事务回滚均不丢失游标", async (t) => {
+  const { app, db } = await createServer({ home: fixture(), worker: false, seed: false });
+  t.after(() => app.close());
+  const snapshot = await app.inject("/api/v1/conversation");
+  let version = Number(snapshot.headers["x-conversation-version"]);
+  assert.equal(version, 0);
+  const ids = Array.from({ length: 167 }, key);
+  const insert = (id: string) => db.run(
+    "INSERT INTO main_messages(id,role,kind,body,created) VALUES(?,'assistant','reminder','提醒',?)",
+    id, new Date().toISOString(),
+  );
+  db.tx(() => ids.forEach(insert));
+  const received: string[] = [];
+  for (const more of [true, true, false]) {
+    const { rows, version: next, more: remaining }: { rows: { id: string }[]; version: number; more: boolean } =
+      (await app.inject("/api/v1/conversation/changes?since=" + version)).json().data;
+    assert.equal(remaining, more);
+    assert.ok(next > version);
+    received.push(...rows.map(r => r.id));
+    version = next;
+  }
+  assert.deepEqual(received, ids);
+  assert.throws(() => db.tx(() => { insert(key()); throw Error("rollback"); }));
+  const result = await app.inject("/api/v1/conversation/changes?since=" + version);
+  assert.deepEqual(result.json().data, { rows: [], version, more: false });
+});

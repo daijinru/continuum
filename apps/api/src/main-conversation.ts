@@ -56,7 +56,7 @@ export const stamp = (date: string) =>
     minute: "2-digit",
     hour12: false,
   });
-export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER): Row[] {
+export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: string[]): Row[] {
   return db
     .all(
       `WITH notices AS (
@@ -78,8 +78,13 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER): Row[] {
     LEFT JOIN goals g ON g.id=h.goal_id
     LEFT JOIN notices n ON n.seq=m.seq LEFT JOIN groups a ON a.goal_id=n.goal_id
     LEFT JOIN main_messages p ON p.seq=a.first_pending
-    WHERE m.seq<? AND (n.seq IS NULL OR m.seq=a.latest) ORDER BY m.seq DESC LIMIT 80`,
+    WHERE m.seq<? AND (n.seq IS NULL OR m.seq=a.latest) ${changed ? `AND m.seq IN (
+        SELECT coalesce(a.latest, changed.seq) FROM main_messages changed
+        LEFT JOIN notices n ON n.seq=changed.seq LEFT JOIN groups a ON a.goal_id=n.goal_id
+        WHERE changed.id IN (SELECT value FROM json_each(?)))` : ""}
+      ORDER BY m.seq DESC LIMIT 80`,
       before,
+      ...(changed ? [JSON.stringify(changed)] : []),
     )
     .reverse()
     .map((m) => ({ ...m, refs: JSON.parse(m.refs) }));

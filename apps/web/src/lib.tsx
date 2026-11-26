@@ -11,6 +11,7 @@ export async function api(
   path: string,
   body?: unknown,
   method = body === undefined ? "GET" : "POST",
+  readHeaders?: (headers: Headers) => void,
 ) {
   if (method !== "GET" && !token) token = (await api("/session")).token;
   const res = await fetch("/api/v1" + path, {
@@ -24,6 +25,7 @@ export async function api(
   const value = await res.json();
   if (res.status === 403 && method !== "GET") token = "";
   if (!res.ok) throw Error(value.error || "请求失败");
+  readHeaders?.(res.headers);
   return value.data;
 }
 export type Scope = {
