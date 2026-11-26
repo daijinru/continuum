@@ -15,6 +15,8 @@
 | 简报 | GET /briefings、/briefings/:id；POST /briefings/generate、/briefings/:id/acknowledge |
 | 收件箱 | GET /inbox、/inbox/:id；POST /inbox/:id/decision |
 | 跟进 | POST /chat/messages；目标详情返回指令历史 |
+| 主对话消息 | `POST /conversation/messages` 接受消息和唯一的 `key`，确认后返回已保存的 `id`、`seq`、`created`、`body`。重试沿用原 key 和回复对象。 |
+| 主对话审批 | `GET /conversation` 将已提醒的操作审批按委托汇总，返回委托 ID、总数、待处理数及下一项待办 ID。用 `GET /conversation/approvals/:id` 按委托读取明细，每页 30 条，`before` 取上一页最后一条的 `seq`。 |
 | 主对话中的目录提醒 | `GET /conversation` 返回提醒及原路径。向 `POST /conversation/directories/:id` 传 `{}` 可立即检查原目录，传 `{"path":"/new/project"}` 可为这项委托确认新位置。`:id` 为提醒消息的 ID。同一提醒重试会返回已有处理结果。 |
 | 计划 | POST /goals/:id/schedules、/schedules/:id/stop；PATCH /goals/:id/limits |
 | 活动 | GET /activity、/stream |

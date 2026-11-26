@@ -12,6 +12,7 @@ import {
 import {
   api,
   useData,
+  useLoad,
   Head,
   Status,
   Provider,
@@ -31,13 +32,17 @@ export function Inbox({ id }: { id?: string }) {
   const { data, error } = useData("/inbox"),
     [tab, set] = useState("pending");
   const pending = (i: Data) => ["pending", "deferred"].includes(i.status);
-  const selected = id && data?.find((i) => i.id === id);
+  const fromList = data?.find((i) => i.id === id);
+  const missing = data && id && !fromList ? id : "";
+  const detail = useLoad<Data | undefined>(missing, async () => missing ? api("/inbox/" + missing) : undefined);
+  const selected = fromList || detail.data;
+  const rows = data && (missing && selected ? [...data, selected] : data);
   const currentTab = selected ? (pending(selected) ? "pending" : "done") : tab;
   const visible =
-    data?.filter((i) =>
+    rows?.filter((i) =>
       currentTab === "pending" ? pending(i) : !pending(i),
     ) || [];
-  const active = id ? data?.find((i) => i.id === id) : visible[0];
+  const active = id ? selected : visible[0];
   return (
     <>
       <Head
@@ -64,13 +69,13 @@ export function Inbox({ id }: { id?: string }) {
             }}
           >
             {v}{" "}
-            {data?.filter((i) => (k === "pending" ? pending(i) : !pending(i)))
+            {rows?.filter((i) => (k === "pending" ? pending(i) : !pending(i)))
               .length || 0}
           </button>
         ))}
       </div>
-      {!data ? (
-        <Status error={error} />
+      {!data || (missing && !selected) ? (
+        <Status error={error || detail.error} />
       ) : (
         <div className={visible.length > 1 ? "split" : "decision-single"}>
           {(visible.length > 1 || !active) && (

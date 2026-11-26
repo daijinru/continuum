@@ -1,13 +1,15 @@
 import { ProjectFolder } from "./ProjectFolder.tsx";
 import React, { useState, useEffect, useRef } from "react";
-import { api, Form, field, useApp, useData, type Data } from "./lib.tsx";
+import { api, Form, field, useData, type Data } from "./lib.tsx";
+import { ChatApprovals } from "./ChatApprovals.tsx";
+import { outgoingRow, queueMessage, reconcileOutbox, retryMessage, useOutbox } from "./conversation-outbox.ts";
 import { tokenTotal } from "./TokenUsage.tsx";
 import { ArrowUp, CornerUpLeft, Infinity as Loop, X } from "lucide-react";
 import { Markdown } from "./Markdown.tsx";
 
 export function Conversation({ focus }: { focus?: string }) {
   const { data: settings } = useData<Data>("/settings");
-  const { update } = useApp();
+  const outbox = useOutbox();
   const [messages, setMessages] = useState<Data[]>([]),
     [more, setMore] = useState(false),
     [loaded, setLoaded] = useState(false);
@@ -16,19 +18,27 @@ export function Conversation({ focus }: { focus?: string }) {
     ),
     [reply, setReply] = useState<Data | null>(null),
     [target, setTarget] = useState<Data | null>(null),
-    [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [offline, setOffline] = useState(false);
-  const requestKey = useRef(crypto.randomUUID()),
+  const draftKey = useRef(crypto.randomUUID()),
+    refresh = useRef<() => void>(() => {}),
     stream = useRef<HTMLDivElement>(null),
     pinned = useRef(true),
     editor = useRef<HTMLTextAreaElement>(null);
-  const merge = (rows: Data[]) =>
-    setMessages((old) =>
-      [...new Map([...old, ...rows].map((r) => [r.id, r])).values()].sort(
-        (a, b) => a.seq - b.seq,
-      ),
-    );
+  const merge = (rows: Data[]) => {
+    setMessages(old => {
+      const unique = new Map<string, Data>();
+      for (const row of [...old, ...rows]) {
+        const key = row.approvalGoal ? "approval:" + row.approvalGoal : row.id;
+        if (!unique.has(key) || unique.get(key)!.seq <= row.seq) unique.set(key, row);
+      }
+      return [...unique.values()].sort((a, b) => a.seq - b.seq);
+    });
+    reconcileOutbox(rows);
+  };
+  const ids = new Set(messages.map(m => m.id));
+  const visible = [...messages, ...outbox.filter(e => !ids.has(e.submission.key)).map(outgoingRow)]
+    .sort((a, b) => a.seq - b.seq);
   const resolved = async (id: string) => {
     const rows = await api("/conversation");
     setMessages((old) =>
@@ -58,6 +68,7 @@ export function Conversation({ focus }: { focus?: string }) {
         fetching = false;
       }
     };
+    refresh.current = load;
     void load();
     const timer = setInterval(load, 2500);
     document.addEventListener("visibilitychange", load);
@@ -67,6 +78,8 @@ export function Conversation({ focus }: { focus?: string }) {
       document.removeEventListener("visibilitychange", load);
     };
   }, []);
+  const receipt = outbox.findLast(entry => entry.status === "sent")?.submission.key;
+  useEffect(() => { if (receipt) refresh.current(); }, [receipt]);
   useEffect(() => {
     let alive = true;
     setTarget(null);
@@ -97,35 +110,26 @@ export function Conversation({ focus }: { focus?: string }) {
     return () => window.removeEventListener("keydown", focusEditor);
   }, []);
   useEffect(() => {
-    if (pinned.current && messages.length && stream.current)
+    if (pinned.current && stream.current)
       stream.current.scrollTop = stream.current.scrollHeight;
-  }, [messages.at(-1)?.seq]);
-  const send = async (quick = false) => {
-    if ((!quick && !text.trim()) || busy) return;
-    setBusy(true);
+  }, [visible.at(-1)?.id, visible.at(-1)?.seq]);
+  const send = (quick = false) => {
+    if (!quick && !text.trim()) return;
+    pinned.current = true;
     setError("");
-    try {
-      await api("/conversation/messages", {
-        key: quick ? crypto.randomUUID() : requestKey.current,
-        text: quick ? "现在都怎么样了？" : text.trim(),
-        ...(!quick && (reply ? { replyTo: reply.id } : focus ? { focus } : {})),
-      });
-      if (!quick) {
-        setText("");
-        sessionStorage.removeItem("main-draft");
-        setReply(null);
-        requestKey.current = crypto.randomUUID();
-        if (focus) location.hash = "chat";
-      }
-      pinned.current = true;
-      merge(await api("/conversation"));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-      update();
+    queueMessage({
+      key: quick ? crypto.randomUUID() : draftKey.current, text: quick ? "现在都怎么样了？" : text.trim(),
+      ...(!quick && (reply ? { replyTo: reply.id } : focus ? { focus } : {})),
+    });
+    if (!quick) {
+      setText("");
+      sessionStorage.removeItem("main-draft");
+      setReply(null);
+      if (focus) location.hash = "chat";
+      editor.current?.focus();
     }
   };
+  const replyTo = (m: Data) => { setReply(m); editor.current?.focus(); };
   return (
     <div className="conversation">
       <div
@@ -154,7 +158,7 @@ export function Conversation({ focus }: { focus?: string }) {
               查看更早的消息
             </button>
           )}
-          {loaded && !messages.length && (
+          {loaded && !visible.length && (
             <section className="chat-empty">
               <Loop size={30} aria-hidden="true" />
               <h2>有什么事要我照看？</h2>
@@ -162,11 +166,11 @@ export function Conversation({ focus }: { focus?: string }) {
             </section>
           )}
           {offline && <p role="status">暂时连不上工作台，正在重连。</p>}
-          {messages.map((m, index) => (
-            <React.Fragment key={m.id}>
+          {visible.map((m, index) => (
+            <React.Fragment key={m.approvalGoal ? "approval:" + m.approvalGoal : m.id}>
               {(!index ||
                 new Date(m.created).toDateString() !==
-                  new Date(messages[index - 1].created).toDateString()) && (
+                  new Date(visible[index - 1].created).toDateString()) && (
                 <div className="day-stamp">
                   <time>
                     {new Date(m.created).toLocaleDateString("zh-CN", {
@@ -177,7 +181,7 @@ export function Conversation({ focus }: { focus?: string }) {
                   </time>
                 </div>
               )}
-              <article className={"chat-message " + m.role}>
+              {m.approvalGoal ? <ChatApprovals message={m} reply={() => replyTo(m)} /> : <article className={"chat-message " + m.role}>
                 <div className="meta">
                   <b>
                     {m.role === "user"
@@ -195,6 +199,9 @@ export function Conversation({ focus }: { focus?: string }) {
                       hour12: false,
                     })}
                   </time>
+                  {m.delivery && <span role="status">
+                    {{queued: "等待发送", sending: "发送中…", sent: "已发送", failed: "发送未确认"}[m.delivery as string]}
+                  </span>}
                 </div>
                 {m.body.length > 800 ? (
                   <>
@@ -207,6 +214,10 @@ export function Conversation({ focus }: { focus?: string }) {
                 ) : (
                   <Markdown text={m.body} />
                 )}
+                {m.delivery === "failed" && <div className="links">
+                  <span role="alert">{m.error}</span>
+                  <button onClick={() => retryMessage(m.id)}>重试发送</button>
+                </div>}
                 {m.kind === "project" && !m.resolvedBy && settings && (
                   <ProjectQuestion
                     message={m}
@@ -241,11 +252,7 @@ export function Conversation({ focus }: { focus?: string }) {
                     {(m.refs.length > 0 ||
                       (m.kind === "project" && !m.resolvedBy)) && (
                       <button
-                        onClick={() => {
-                          setReply(m);
-                          requestKey.current = crypto.randomUUID();
-                          editor.current?.focus();
-                        }}
+                        onClick={() => replyTo(m)}
                       >
                         <CornerUpLeft size={13} /> 回复这条
                       </button>
@@ -267,7 +274,7 @@ export function Conversation({ focus }: { focus?: string }) {
                     )}
                   </div>
                 )}
-              </article>
+              </article>}
             </React.Fragment>
           ))}
         </div>
@@ -306,8 +313,6 @@ export function Conversation({ focus }: { focus?: string }) {
               name="message"
               ref={editor}
               value={text}
-              readOnly={busy}
-              aria-busy={busy}
               onKeyDown={(e) => {
                 if (
                   !e.nativeEvent.isComposing &&
@@ -319,9 +324,9 @@ export function Conversation({ focus }: { focus?: string }) {
                 }
               }}
               onChange={(e) => {
+                draftKey.current = crypto.randomUUID();
                 setText(e.target.value);
                 sessionStorage.setItem("main-draft", e.target.value);
-                requestKey.current = crypto.randomUUID();
               }}
               maxLength={4000}
               rows={1}
@@ -331,7 +336,7 @@ export function Conversation({ focus }: { focus?: string }) {
               className="send-btn"
               aria-label="发送"
               title="发送（⌘↵）"
-              disabled={busy || !text.trim()}
+              disabled={!text.trim()}
             >
               <ArrowUp size={18} />
             </button>
@@ -340,7 +345,7 @@ export function Conversation({ focus }: { focus?: string }) {
           <div className="compose-tools">
             <button
               type="button"
-              disabled={busy}
+              disabled={outbox.some(entry => entry.submission.text === "现在都怎么样了？" && ["queued","sending"].includes(entry.status))}
               onClick={() => void send(true)}
             >
               问进度
@@ -351,7 +356,7 @@ export function Conversation({ focus }: { focus?: string }) {
               </a>
             )}
             <small role="status">
-              {busy ? "正在处理…" : "⌘ K 输入　⌘ ↵ 发送"}
+              ⌘ K 输入　⌘ ↵ 发送
             </small>
           </div>
         </div>
