@@ -56,7 +56,9 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 ## 轻量验证和自动合并
 
-默认交付范围及例外见 [仓库协作约定](../AGENTS.md)。提交 PR 前，先检查本分支相对 `main` 的**全部已提交改动**，然后推送并运行回执中 `next` 给出的 `pnpm harness pr submit --issue N`。推送前从工作分支最近的非合并提交读取唯一的 `Refs: #42` 并核对 Issue。回执里的编号必须与 `pr submit --issue 42` 一致。新 PR 写入 `Closes #42`。复用 PR 时，已有正确关联就沿用；缺少关联时在原描述末尾补上；仅关联其他 Issue 时提示核对。启用自动合并前，以 GitHub 实际识别到的本仓库 Issue 链接为准。用户要求仅评审时不执行 `pr submit`。工作区中的未提交修改不会进 PR。
+默认交付范围及例外见[仓库协作约定](../AGENTS.md)。先对照 Issue 的验收条件审阅完整差异，再执行 `commit push` 和回执里的 `pr submit --issue N`。这两个入口都会更新 `origin/main`，检查分支相对它新增的每个非合并提交，包括从其他工作分支合入的提交。每个提交都须有唯一的 `Refs: #N`，编号须一致。同步 main 带来的已合入提交会自动排除。报错给出有问题的提交号，可用 `pnpm harness commit show SHA` 核对内容，按任务放回各自分支。
+
+新 PR 用 `Closes #N` 关联任务。复用 PR 时保留已有描述，缺少关联就补上。启用自动合并前，harness 核对 GitHub 实际标记为随 PR 关闭的 Issue，要求只有本项。总 Issue、前置任务和讨论背景均可用普通链接引用。用户要求仅评审时不执行 `pr submit`。
 
 仓库启用 GitHub 原生 auto-merge，`main` 的活动规则集要求通过 PR 和 GitHub Actions 的 `lint` 检查（应用 ID `15368`）。GitHub 检出 PR 合并候选、按锁文件安装依赖、运行 `pnpm lint`。新提交触发新检查。harness 只为当前工作分支的 PR 申请自动合并，校验已推送的 HEAD，不使用管理员绕过；普通 PR 只自动验证，不自动申请合并。若分支落后且规则要求同步，请先更新分支再验证。
 

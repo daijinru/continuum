@@ -280,10 +280,12 @@ test("本地清理只删已合并、远端已删、PR 尖端一致且无 worktre
   }
 });
 
-test("发布使用同一真实 Issue，核对 GitHub 关联后才开启合并", (t) => {
+function publicationFixture(t: import("node:test").TestContext) {
   const { git, dir, file, harness } = fixture(t);
+  git("commit", "--allow-empty", "-qm", "base");
+  git("init", "--bare", "-q", "upstream.git");
+  git("push", "./upstream.git", "HEAD:refs/heads/main");
   git("switch", "-qc", "feature");
-  git("commit", "--allow-empty", "-qm", "initial");
   const realGit = spawnSync("which", ["git"], {
     encoding: "utf8",
   }).stdout.trim();
@@ -292,8 +294,9 @@ test("发布使用同一真实 Issue，核对 GitHub 关联后才开启合并", 
     `#!${process.execPath}
 const fs = require("node:fs"), cp = require("node:child_process");
 const args = process.argv.slice(2);
+if (args[0] === "fetch") args[args.indexOf("origin")] = "./upstream.git";
 if (args[0] === "ls-remote") console.log(cp.execFileSync(${JSON.stringify(realGit)}, ["rev-parse","HEAD"], {encoding:"utf8"}).trim()+"\\t"+args[2]);
-else if (args[0] === "push") fs.appendFileSync("writes","push\\n");
+else if (args[0] === "push" && args[1] === "origin") fs.appendFileSync("writes","push\\n");
 else process.exit(cp.spawnSync(${JSON.stringify(realGit)},args,{stdio:"inherit"}).status);
 `,
   );
@@ -323,28 +326,82 @@ console.log(typeof output === "string" ? output : JSON.stringify(output));`,
   file("writes", "");
   const writes = () => readFileSync(join(dir, "writes"), "utf8");
   const submit = () => harness("pr", "submit", "--issue", "42");
-  assert.match(harness("commit", "push").stderr, /Refs/);
+  const push = () => harness("commit", "push");
+  return { git, dir, file, harness, writes, submit, push, target };
+}
+
+test("发布前检查全部任务提交，包括合入的侧分支，允许同题多提交及同步 main", (t) => {
+  const { git, harness, writes, submit, push } = publicationFixture(t);
+  const rejected = (reason: RegExp) => {
+    for (const run of [push, submit]) {
+      const result = run();
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, reason);
+    }
+    assert.equal(writes(), "");
+  };
+  rejected(/没有待交付/);
   assert.match(harness("pr", "submit").stderr, /缺少 --issue/);
-  assert.match(submit().stderr, /Refs/);
-  git("commit", "--allow-empty", "-qm", "task", "-m", "Refs: #43");
-  assert.match(harness("commit", "push").stderr, /是 PR/);
+  git("commit", "--allow-empty", "-qm", "wrong issue", "-m", "Refs: #43");
+  assert.match(push().stderr, /是 PR/);
   assert.match(submit().stderr, /不一致/);
-  assert.equal(writes(), "");
+  const wrong = git("rev-parse", "--short", "HEAD").trim();
+  git("commit", "--allow-empty", "-qm", "latest", "-m", "Refs: #42");
+  rejected(new RegExp(wrong + ".*#43.*#42"));
+
+  for (const [name, trailer] of [
+    ["unassigned", ""],
+    ["two-trailers", "Refs: #42\nRefs: #42"],
+    ["mixed-trailer", "Refs: #42, #44"],
+  ]) {
+    git("switch", "-qc", name, "main");
+    git("commit", "--allow-empty", "-qm", name, "-m", trailer);
+    const invalid = git("rev-parse", "--short", "HEAD").trim();
+    git("switch", "-qc", "merge-" + name, "main");
+    git("commit", "--allow-empty", "-qm", "task", "-m", "Refs: #42");
+    git("merge", "--no-ff", "-qm", "include side branch", name);
+    rejected(new RegExp(invalid + ".*Refs"));
+  }
+
+  git("switch", "-qc", "one-task", "main");
+  git("commit", "--allow-empty", "-qm", "implementation", "-m", "Refs: #42");
+  git("commit", "--allow-empty", "-qm", "regression", "-m", "Refs: #42");
+  git("switch", "-q", "main");
+  git(
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "another merged task",
+    "-m",
+    "Refs: #44",
+  );
+  git("push", "./upstream.git", "HEAD:refs/heads/main");
+  git("switch", "-q", "one-task");
+  git("merge", "--no-ff", "-qm", "sync main", "main");
+  const pushed = push();
+  assert.equal(pushed.status, 0, pushed.stderr);
+  assert.equal(JSON.parse(pushed.stdout).issue, 42);
+  assert.equal(writes(), "push\n");
+});
+
+test("发布使用同一真实 Issue，核对 GitHub 关联后才开启合并", (t) => {
+  const { git, dir, file, writes, submit, push, target } =
+    publicationFixture(t);
   git("commit", "--allow-empty", "-qm", "task", "-m", "Refs: #42");
-  const pushed = harness("commit", "push");
+  const pushed = push();
   assert.equal(pushed.status, 0, pushed.stderr);
   assert.equal(
     JSON.parse(pushed.stdout).next,
     "pnpm harness pr submit --issue 42",
   );
   for (const exists of [false, true]) {
-    file("pr.json", JSON.stringify({ exists, body: "已有说明" }));
+    file("pr.json", JSON.stringify({ exists, body: "相关背景 #41" }));
     file("writes", "");
     const result = submit();
     assert.equal(result.status, 0, result.stderr);
     assert.equal(writes(), exists ? "patch\nmerge\n" : "create\nmerge\n");
     const { body } = JSON.parse(readFileSync(join(dir, "pr.json"), "utf8"));
-    assert.equal(body, exists ? "已有说明\n\nCloses #42" : "Closes #42");
+    assert.equal(body, exists ? "相关背景 #41\n\nCloses #42" : "Closes #42");
     file("writes", "");
     assert.equal(submit().status, 0);
     assert.equal(writes(), "merge\n");
@@ -352,6 +409,10 @@ console.log(typeof output === "string" ? output : JSON.stringify(output));`,
   for (const links of [
     [],
     [{ url: "https://github.com/another/repo/issues/42" }],
+    [
+      { url: target },
+      { url: "https://github.com/daijinru/continuum/issues/44" },
+    ],
   ]) {
     file("writes", "");
     file(
