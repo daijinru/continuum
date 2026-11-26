@@ -103,22 +103,24 @@ const workspace = row({ id, path: str, enabled: z.number() }),
   });
 const count = z.number().int().nonnegative().nullable();
 const usage = z.object({ input: count, output: count, total: count });
+const conversationRows = z.array(
+  row({
+    id,
+    seq: z.number().int(),
+    role: z.enum(["user", "assistant"]),
+    kind: str,
+    body: str,
+    created: str,
+    refs: z.array(row({ id, title: str })),
+    approvalGoal: id.nullable(),
+    approvalTotal: z.number().int().nullable(),
+    approvalPending: z.number().int().nullable(),
+    nextApproval: id.nullable(),
+  }),
+);
 export const outputs: Record<string, ZodTypeAny> = {
-  "GET /conversation": z.array(
-    row({
-      id,
-      seq: z.number().int(),
-      role: z.enum(["user", "assistant"]),
-      kind: str,
-      body: str,
-      created: str,
-      refs: z.array(row({ id, title: str })),
-      approvalGoal: id.nullable(),
-      approvalTotal: z.number().int().nullable(),
-      approvalPending: z.number().int().nullable(),
-      nextApproval: id.nullable(),
-    }),
-  ),
+  "GET /conversation": conversationRows,
+  "GET /conversation/changes": row({ rows: conversationRows, version: z.number().int(), more: z.boolean() }),
   "GET /conversation/approvals/:id": z.array(row({ id, seq: z.number().int(), status: str, title: str, created: str })),
   "POST /conversation/messages": row({ id, seq: z.number().int(), created: str, body: str }),
   "POST /conversation/projects/:id": row({ id }),

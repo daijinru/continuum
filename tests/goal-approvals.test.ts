@@ -236,7 +236,12 @@ test("主对话折叠同委托审批后再分页，补充信息独立显示，�
     assert.equal(res.statusCode, 200);
     return res.json().data;
   };
-  const feed = await get("/conversation");
+  const snapshot = await f.api.app.inject("/api/v1/conversation");
+  const version = Number(snapshot.headers["x-conversation-version"]);
+  assert.ok(version > 0);
+  const feed = snapshot.json().data;
+  const changes = () => get("/conversation/changes?since=" + version);
+  assert.deepEqual(await changes(), { rows: [], version, more: false });
   const group = feed.find((r: any) => r.approvalGoal === first.id);
   assert.equal(feed.filter((r: any) => r.approvalGoal).length, 2);
   assert.equal(group.approvalTotal, 105);
@@ -259,6 +264,9 @@ test("主对话折叠同委托审批后再分页，补充信息独立显示，�
     key: uid(),
     version: 1,
   });
+  const delta = await changes();
+  assert.ok(delta.version > version);
+  assert.ok(delta.rows.some((row: any) => row.id === group.id && row.approvalPending === 104));
   const updated = (await get("/conversation")).find(
     (r: any) => r.approvalGoal === first.id,
   );

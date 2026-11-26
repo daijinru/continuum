@@ -1,11 +1,10 @@
 import React, { useState } from "react";
-import { Badge, dt, Status, useData, type Data } from "./lib.tsx";
+import { Badge, dt, Status, api, useLoad, type Data } from "./lib.tsx";
 
-function ApprovalList({ goal, before }: { goal: string; before?: number }) {
+function ApprovalList({ goal, before, revision }: { goal: string; before?: number; revision?: number }) {
   const [more, setMore] = useState(false);
-  const { data, error } = useData(
-    "/conversation/approvals/" + goal + (before ? "?before=" + before : ""),
-  );
+  const path = "/conversation/approvals/" + goal + (before ? "?before=" + before : "");
+  const { data, error } = useLoad<Data[]>(path + ":" + (revision ?? 0), () => api(path));
   if (!data) return <Status error={error} />;
   return (
     <>
@@ -20,7 +19,7 @@ function ApprovalList({ goal, before }: { goal: string; before?: number }) {
       </ul>
       {data.length === 30 &&
         (more ? (
-          <ApprovalList goal={goal} before={data[data.length - 1].seq} />
+          <ApprovalList goal={goal} revision={revision} before={data[data.length - 1].seq} />
         ) : (
           <button onClick={() => setMore(true)}>查看更早的审批</button>
         ))}
@@ -52,7 +51,7 @@ export function ChatApprovals({
         </summary>
         {open && (
           <>
-            <ApprovalList goal={message.approvalGoal} />
+            <ApprovalList goal={message.approvalGoal} revision={message.approvalRevision} />
             <div className="links">
               <a href={"#goal/" + message.approvalGoal}>查看委托</a>
               <button onClick={reply}>回复这条</button>

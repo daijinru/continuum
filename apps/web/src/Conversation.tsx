@@ -22,15 +22,20 @@ export function Conversation({ focus }: { focus?: string }) {
     [offline, setOffline] = useState(false);
   const draftKey = useRef(crypto.randomUUID()),
     refresh = useRef<() => void>(() => {}),
+    earlier = useRef<() => void>(() => {}),
+    floor = useRef(0),
     stream = useRef<HTMLDivElement>(null),
     pinned = useRef(true),
     editor = useRef<HTMLTextAreaElement>(null);
-  const merge = (rows: Data[]) => {
+  const merge = (rows: Data[], mode: "latest" | "changes" | "history" = "latest") => {
     setMessages(old => {
       const unique = new Map<string, Data>();
-      for (const row of [...old, ...rows]) {
+      for (const row of old) unique.set(row.approvalGoal ? "approval:" + row.approvalGoal : row.id, row);
+      for (const row of rows) {
+        if (mode === "changes" && row.seq < floor.current) continue;
         const key = row.approvalGoal ? "approval:" + row.approvalGoal : row.id;
-        if (!unique.has(key) || unique.get(key)!.seq <= row.seq) unique.set(key, row);
+        const known = unique.get(key);
+        if (!known || known.seq < row.seq || (known.seq === row.seq && mode !== "history")) unique.set(key, row);
       }
       return [...unique.values()].sort((a, b) => a.seq - b.seq);
     });
@@ -40,41 +45,90 @@ export function Conversation({ focus }: { focus?: string }) {
   const visible = [...messages, ...outbox.filter(e => !ids.has(e.submission.key)).map(outgoingRow)]
     .sort((a, b) => a.seq - b.seq);
   const resolved = async (id: string) => {
-    const rows = await api("/conversation");
     setMessages((old) =>
       old.map((row) => (row.id === id ? { ...row, resolvedBy: true } : row)),
     );
-    merge(rows);
+    refresh.current();
   };
   useEffect(() => {
-    let alive = true,
-      fetching = false,
-      first = true;
+    let alive = true, fetching = false, pending = false, older = false, version: number | undefined;
+    let loadedOnce = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
-      if (fetching || document.hidden) return;
+      if (!alive || document.hidden) return;
+      if (fetching) { pending = true; return; }
       fetching = true;
+      clearTimeout(retry);
       try {
-        const data = await api("/conversation");
-        if (alive) {
-          merge(data);
-          setLoaded(true);
-          setOffline(false);
-          if (first) setMore(data.length === 80);
-          first = false;
-        }
+        do {
+          pending = false;
+          if (older && floor.current) {
+            const rows = await api("/conversation?before=" + floor.current);
+            older = false;
+            if (!alive) return;
+            merge(rows, "history");
+            floor.current = rows.length === 80 ? rows[0].seq : 0;
+            setMore(!!floor.current);
+          }
+          if (version === undefined) {
+            let cursor: string | null = null;
+            const rows = await api("/conversation", undefined, "GET", headers => {
+              cursor = headers.get("X-Conversation-Version");
+            });
+            if (!alive) return;
+            merge(rows);
+            if (!loadedOnce) {
+              floor.current = rows.length === 80 ? rows[0].seq : 0;
+              setMore(!!floor.current);
+              loadedOnce = true;
+            }
+            setLoaded(true);
+            if (cursor !== null) version = Number(cursor);
+          } else {
+            const batch = await api("/conversation/changes?since=" + version);
+            if (!alive) return;
+            if (batch.version < version) {
+              setMessages([]);
+              loadedOnce = false;
+              version = undefined;
+              pending = true;
+            } else {
+              if (batch.rows.length) merge(batch.rows.map((row: Data) =>
+                row.approvalGoal ? { ...row, approvalRevision: batch.version } : row
+              ), "changes");
+              version = batch.version;
+              pending ||= batch.more;
+            }
+          }
+        } while (pending && !document.hidden);
+        setOffline(false);
+        // An older local service supplies neither a cursor nor change events.
+        if (version === undefined) retry = setTimeout(load, 2500);
       } catch {
-        if (alive) setOffline(true);
+        if (alive) {
+          setOffline(true);
+          retry = setTimeout(load, 2500);
+        }
       } finally {
         fetching = false;
       }
     };
+    const changed = (event: Event) => {
+      setOffline(false);
+      if ((event as CustomEvent<number>).detail !== version) void load();
+    };
+    const disconnected = () => setOffline(true);
     refresh.current = load;
-    void load();
-    const timer = setInterval(load, 2500);
+    earlier.current = () => { older = true; void load(); };
+    window.addEventListener("conversation-changed", changed);
+    window.addEventListener("conversation-disconnected", disconnected);
     document.addEventListener("visibilitychange", load);
+    void load();
     return () => {
       alive = false;
-      clearInterval(timer);
+      clearTimeout(retry);
+      window.removeEventListener("conversation-changed", changed);
+      window.removeEventListener("conversation-disconnected", disconnected);
       document.removeEventListener("visibilitychange", load);
     };
   }, []);
@@ -143,17 +197,7 @@ export function Conversation({ focus }: { focus?: string }) {
         <div className="chat-column">
           {more && (
             <button
-              onClick={async () => {
-                try {
-                  const rows = await api(
-                    "/conversation?before=" + messages[0].seq,
-                  );
-                  merge(rows);
-                  setMore(rows.length === 80);
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
+              onClick={() => earlier.current()}
             >
               查看更早的消息
             </button>

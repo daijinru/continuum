@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
@@ -90,23 +90,23 @@ export async function createServer(
   const route = (
     method: "GET" | "POST" | "PATCH",
     path: string,
-    handler: (req: Req) => any,
+    handler: (req: Req, reply: FastifyReply) => any,
   ) =>
     app.route({
       method,
       url: prefix + path,
-      handler: async (req) => {
+      handler: async (req, reply) => {
         const data = await handler({
           id: (req.params as any).id,
           body: req.body,
           q: req.query as any,
-        });
+        }, reply);
         const parsed = outputs[method + " " + path].safeParse(data);
         if (!parsed.success) throw new Problem("服务返回了无效记录", 500);
         return { data: parsed.data };
       },
     });
-  const get = (p: string, f: (r: Req) => any) => route("GET", p, f),
+  const get = (p: string, f: (r: Req, reply: FastifyReply) => any) => route("GET", p, f),
     post = (p: string, f: (r: Req) => any) => route("POST", p, f);
   const page = (q: Req["q"]) =>
     z.coerce.number().int().min(1).max(500).default(100).parse(q.limit);
@@ -130,9 +130,21 @@ export async function createServer(
       setImmediate(() => options.restart?.());
     }
   });
-  get("/conversation", ({ q }) =>
-    timeline(db, q.before ? offset({ offset: q.before }) : undefined),
-  );
+  const chatVersion = () => Number(db.must("SELECT coalesce(max(version),0) v FROM conversation_changes").v);
+  get("/conversation", ({ q }, reply) => {
+    reply.header("X-Conversation-Version", chatVersion());
+    return timeline(db, q.before ? offset({ offset: q.before }) : undefined);
+  });
+  get("/conversation/changes", ({ q }) => {
+    const since = offset({ offset: q.since });
+    const changed = db.all("SELECT version,message_id FROM conversation_changes WHERE version>? ORDER BY version LIMIT 81", since);
+    const batch = changed.slice(0, 80);
+    return {
+      rows: batch.length ? timeline(db, undefined, batch.map(r => r.message_id)) : [],
+      version: batch.at(-1)?.version ?? chatVersion(),
+      more: changed.length > batch.length,
+    };
+  });
   get("/conversation/approvals/:id", ({ id, q }) => db.all(
     `SELECT i.id,i.status,i.title,i.created,m.seq FROM inbox_items i
      JOIN main_messages m ON m.origin='inbox:'||i.id
@@ -567,6 +579,18 @@ export async function createServer(
     return db.must("SELECT * FROM user_messages WHERE id=?", id);
   });
   const streams = new Set<ServerResponse>();
+  // SQLite invokes the hook inside the transaction. Read its committed cursor
+  // on the next event-loop turn, coalescing writes and ignoring rollbacks.
+  let chatWake: ReturnType<typeof setImmediate> | undefined;
+  db.db.function("wake_conversation", () => {
+    chatWake ??= setImmediate(() => {
+      chatWake = undefined;
+      s.bus.emit("conversation", chatVersion());
+    });
+    return null;
+  });
+  db.db.exec(`CREATE TEMP TRIGGER wake_chat AFTER INSERT ON conversation_changes
+    BEGIN SELECT wake_conversation(); END`);
   app.addHook("preClose", async () => {
     restarting = true;
     for (const res of streams) res.end();
@@ -592,9 +616,17 @@ export async function createServer(
       "X-Accel-Buffering": "no",
     });
     res.write(": connected\n\n");
-    let blocked = false;
+    let blocked = false, chatCursor = -1, latestChat = chatVersion();
+    const drain = () => {
+      blocked = true;
+      res.once("drain", () => { blocked = false; flush(); });
+    };
     const flush = () => {
       if (blocked || res.destroyed || res.writableEnded) return;
+      if (chatCursor !== latestChat) {
+        chatCursor = latestChat;
+        if (!res.write("event: conversation\ndata: " + chatCursor + "\n\n")) return drain();
+      }
       for (;;) {
         const rows = db.all(
           "SELECT seq,id,goal_id,type FROM raw_events WHERE seq>? ORDER BY seq LIMIT 100",
@@ -611,17 +643,14 @@ export async function createServer(
                 "\n\n",
             )
           ) {
-            blocked = true;
-            res.once("drain", () => {
-              blocked = false;
-              flush();
-            });
-            return;
+            return drain();
           }
         }
         if (rows.length < 100) return;
       }
     };
+    const chatChanged = (version: number) => { latestChat = version; flush(); };
+    s.bus.on("conversation", chatChanged);
     s.bus.on("event", flush);
     flush();
     const timer = setInterval(() => {
@@ -630,6 +659,7 @@ export async function createServer(
     res.on("close", () => {
       streams.delete(res);
       clearInterval(timer);
+      s.bus.off("conversation", chatChanged);
       s.bus.off("event", flush);
     });
   });
@@ -660,6 +690,7 @@ export async function createServer(
   }
   app.addHook("onClose", async () => {
     await Promise.all([worker.stop(), agenda.stop(), conversation.drain()]);
+    if (chatWake) clearImmediate(chatWake);
     s.close();
   });
   return { app, s, db, worker, token, conversation, agenda };
