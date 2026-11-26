@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { realpathSync, lstatSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname } from "node:path";
 import { Rpc, type Packet } from "./rpc.ts";
 import {
   redact,
+  maskSecrets,
   ApprovalScopeChanged,
   type AgentAdapter,
   type Context,
@@ -64,7 +66,8 @@ type Session = {
   items: Map<string, ThreadItem>;
   requests: Map<
     string,
-    { id: string | number; canApprove?: () => boolean; questions?: string[] }
+    { id: string | number; canApprove?: () => boolean; questions?: string[];
+      review?: { command: string; cwd: string; receipt?: { version: number; key: string } } }
   >;
 };
 function inside(root: string, path: string) {
@@ -251,22 +254,21 @@ export class CodexAdapter implements AgentAdapter {
         const key = JSON.stringify(p.id),
           item = s.items.get(a.itemId);
         const command = method.includes("commandExecution");
+        const metadata = {
+          cwd: a.cwd,
+          kind: a.kind,
+          environmentId: a.environmentId,
+          network: a.networkApprovalContext,
+          additionalPermissions: a.additionalPermissions,
+        };
         const action = command
-          ? JSON.stringify({
-              command: a.command,
-              cwd: a.cwd,
-              kind: a.kind,
-              environmentId: a.environmentId,
-              network: a.networkApprovalContext,
-              additionalPermissions: a.additionalPermissions,
-            })
+          ? JSON.stringify({ command: a.command, ...metadata })
           : JSON.stringify({
               changes: item?.type === "fileChange" ? item.changes : [],
               grantRoot: a.grantRoot,
             });
-        const canApprove = () =>
-          action === redact(action) &&
-          (command
+        const inScope = () =>
+          command
             ? !!a.command &&
               inside(c.workspace, a.cwd || c.workspace) &&
               (!a.kind || a.kind === "command")
@@ -279,9 +281,39 @@ export class CodexAdapter implements AgentAdapter {
                   (ch.kind.type !== "update" ||
                     !ch.kind.move_path ||
                     permittedFile(c.workspace, ch.kind.move_path)),
-              ));
-        const allowed = canApprove();
-        s.requests.set(key, { id: p.id!, canApprove });
+              );
+        const ordinary =
+          !a.networkApprovalContext &&
+          !a.additionalPermissions &&
+          !a.grantRoot &&
+          (a.availableDecisions == null ||
+            (Array.isArray(a.availableDecisions) &&
+              a.availableDecisions.includes("accept")));
+        const publicCommand =
+          typeof a.command === "string" ? maskSecrets(a.command) : a.command;
+        const preview = redact(
+          command && publicCommand !== a.command
+            ? JSON.stringify({ command: publicCommand, ...metadata })
+            : action,
+        );
+        const allowed = action === preview && inScope();
+        const metadataText = JSON.stringify(metadata);
+        const masked =
+          command &&
+          !allowed &&
+          ordinary &&
+          inScope() &&
+          (!a.environmentId || a.environmentId === "local") &&
+          typeof a.command === "string" &&
+          (publicCommand !== a.command || maskSecrets(action) !== action) &&
+          redact(metadataText) === metadataText;
+        s.requests.set(key, {
+          id: p.id!,
+          canApprove: () => (allowed || masked) && inScope(),
+          review: masked
+            ? { command: a.command, cwd: a.cwd || c.workspace }
+            : undefined,
+        });
         c.emit({
           key: "request:" + key,
           type: "approval.requested",
@@ -290,13 +322,16 @@ export class CodexAdapter implements AgentAdapter {
           unit: "approval:" + key,
           approval: {
             id: key,
-            action: redact(action),
+            action: preview,
             reason: redact(a.reason || "此操作需要本次授权"),
             scope: c.workspace,
-            risk: allowed ? "需审查" : "范围无法完整核验，仅可拒绝",
-            allowForRun: allowed && !a.networkApprovalContext && !a.additionalPermissions &&
-              !a.grantRoot && (a.availableDecisions == null ||
-                (Array.isArray(a.availableDecisions) && a.availableDecisions.includes("accept"))),
+            risk: masked
+              ? "命令预览已隐藏部分内容"
+              : allowed
+                ? "需审查"
+                : "范围无法完整核验，仅可拒绝",
+            allowForRun: allowed && ordinary,
+            maskedCommand: masked,
           },
         });
       } else
@@ -446,11 +481,39 @@ export class CodexAdapter implements AgentAdapter {
           data: { status: item.status },
         });
   }
-  async respond(id: string, request: string, decision: "approve" | "deny") {
+  reviewCommand(id: string, request: string, version: number) {
+    const s = this.sessions.get(id),
+      entry = s?.requests.get(request);
+    if (
+      !s ||
+      s.ended ||
+      s.rpc.closed ||
+      !entry?.review ||
+      !entry.canApprove?.()
+    )
+      return;
+    const review = entry.review;
+    if (review.receipt?.version !== version)
+      review.receipt = { version, key: randomUUID() };
+    return {
+      command: review.command,
+      cwd: review.cwd,
+      reviewKey: review.receipt.key,
+    };
+  }
+  async respond(
+    id: string,
+    request: string,
+    decision: "approve" | "deny",
+    allowMaskedCommand = false,
+  ) {
     const s = this.sessions.get(id),
       entry = s?.requests.get(request);
     if (!s || s.rpc.closed || !entry) throw Error("请求已过期");
-    if (decision === "approve" && !entry.canApprove?.())
+    if (
+      decision === "approve" &&
+      (!entry.canApprove?.() || (entry.review && !allowMaskedCommand))
+    )
       throw new ApprovalScopeChanged("操作范围已改变，仅可拒绝");
     s.requests.delete(request);
     const result: CommandExecutionRequestApprovalResponse = {

@@ -96,7 +96,7 @@ export function Inbox({ id }: { id?: string }) {
               )}
             </div>
           )}
-          {active && <Decision key={active.id} i={active} />}
+          {active && <Decision key={active.id + ":" + active.version} i={active} />}
         </div>
       )}
     </>
@@ -105,7 +105,8 @@ export function Inbox({ id }: { id?: string }) {
 function Decision({ i }: { i: Data }) {
   const { chat, notice } = useApp(),
     { data } = useData<Data>("/inbox/" + i.id),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [review, setReview] = useState<{command: string; cwd: string; reviewKey: string} | null>(null);
   const decide = async (d: string, extra: Data = {}) => {
     setBusy(true);
     try {
@@ -116,12 +117,14 @@ function Decision({ i }: { i: Data }) {
         ...extra,
       });
       notice("决定已记录");
+      setReview(null);
     } finally {
       setBusy(false);
     }
   };
   const copy = decisionCopy(i);
   const open = ["pending", "deferred"].includes(i.status);
+  const approvalDisabled = busy || i.risk?.includes("仅可拒绝") || (!!i.masked_command && !review);
   const reason = i.reason !== "此操作需要本次授权" && i.reason;
   return (
     <section className="panel pad decision">
@@ -157,7 +160,7 @@ function Decision({ i }: { i: Data }) {
         </p>
       )}
       <details className="request-details" open={copy.inspect || undefined}>
-        <summary>核对{copy.command ? "完整命令" : "原始请求"}与范围</summary>
+        <summary>{i.masked_command ? "查看脱敏预览与范围" : `核对${copy.command ? "完整命令" : "原始请求"}与范围`}</summary>
         <dl>
           <dt>请求范围</dt>
           <dd>{i.scope}</dd>
@@ -176,6 +179,22 @@ function Decision({ i }: { i: Data }) {
           <pre>{copy.raw}</pre>
         )}
       </details>
+      {open && !!i.masked_command && (
+        <div>
+          <p>完整命令可能含敏感信息，仅在本机展示。按委托授权后，这项委托各轮的常规操作将自动通过，包括预览有遮盖的命令。</p>
+          {review ? (
+            <>
+              <p>执行目录　{review.cwd}</p>
+              <pre>{review.command}</pre>
+              <button onClick={() => setReview(null)}>隐藏原文</button>
+            </>
+          ) : (
+            <Action disabled={busy} run={async () => setReview(await api("/inbox/" + i.id + "/review", { version: i.version }))}>
+              在本机查看完整命令
+            </Action>
+          )}
+        </div>
+      )}
       {open && !!i.allow_for_run && (
         <p className="muted">
           本轮授权持续到本轮结束或断线。按委托授权还会用于以后各轮，可在委托详情撤销。两者都允许常规命令和文件修改（包括删除），需要额外权限时仍会询问。
@@ -187,20 +206,21 @@ function Decision({ i }: { i: Data }) {
             <>
               <Action
                 className="primary"
-                disabled={busy || i.risk.includes("仅可拒绝")}
-                run={() => decide("approve")}
+                disabled={approvalDisabled}
+                run={() => decide("approve", review ? { reviewKey: review.reviewKey } : {})}
               >
                 仅允许这一次
               </Action>
               {!!i.allow_for_run && (
-                <>
-                  <Action disabled={busy || i.risk.includes("仅可拒绝")} run={() => decide("approve_run")}>
-                    允许本轮后续操作
-                  </Action>
-                  <Action disabled={busy || i.risk.includes("仅可拒绝")} run={() => decide("approve_goal")}>
-                    允许这项委托的后续操作
-                  </Action>
-                </>
+                <Action disabled={approvalDisabled} run={() => decide("approve_run")}>
+                  允许本轮后续操作
+                </Action>
+              )}
+              {(!!i.allow_for_run || !!i.masked_command) && (
+                <Action disabled={approvalDisabled}
+                  run={() => decide("approve_goal", review ? { reviewKey: review.reviewKey } : {})}>
+                  {i.masked_command ? "按委托授权" : "允许这项委托的后续操作"}
+                </Action>
               )}
               <Action disabled={busy} run={() => decide("deny")}>
                 拒绝

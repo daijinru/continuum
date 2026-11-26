@@ -49,6 +49,7 @@ export type Observation = {
     kind?: "approval" | "input";
     blocking?: boolean;
     allowForRun?: boolean;
+    maskedCommand?: boolean;
   };
 };
 export type Sink = (event: Observation) => void;
@@ -69,10 +70,12 @@ export type Context = {
 export interface AgentAdapter {
   processRoots?(): Map<number, string>;
   start(context: Context): Promise<void>;
+  reviewCommand?(run: string, request: string, version: number): { command: string; cwd: string; reviewKey: string } | undefined;
   respond(
     id: string,
     request: string,
     decision: "approve" | "deny",
+    allowMaskedCommand?: boolean,
   ): Promise<void>;
   answer?(
     id: string,
@@ -83,7 +86,7 @@ export interface AgentAdapter {
   reconcile(context: Context): Promise<RunStatus>;
   close(): void;
 }
-export function redact(value: string) {
+export function maskSecrets(value: string) {
   return value
     .replace(
       /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi,
@@ -98,6 +101,8 @@ export function redact(value: string) {
       /(["']?[\w.-]*(?:token|secret|password|api[_-]?key|authorization|cookie|credential)[\w.-]*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
       "$1[已隐藏]",
     )
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[已隐藏]@")
-    .slice(0, 4000);
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[已隐藏]@");
+}
+export function redact(value: string) {
+  return maskSecrets(value).slice(0, 4000);
 }

@@ -25,6 +25,8 @@
 
 同一类待处理审批也接受 `decision: "approve_goal"`。这会把授权保存在本机，只用于这项委托在当前项目中的常规操作，后续手动或定时运行均可沿用。暂停期间不自动批准。结束委托、更换项目或停用项目会取消委托授权。自动批准记为 `actor: "goal_grant"`，详情中的 `grant` 指向原始审批。委托详情 `GET /goals/:id` 返回 `approvalGrant`（原审批 ID 或 null）。向 `POST /goals/:id/revoke-approval` 提交 `{"grant":"原审批 ID"}` 可撤销它。
 
+对于 `masked_command: 1` 的待处理命令，本机会话可向 `POST /inbox/:id/review` 提交当前 `version`，临时查看原始命令和执行目录。选择 `approve` 或 `approve_goal` 时带上响应的 `reviewKey`。选择委托授权后，同一委托后续符合条件的脱敏命令可自动通过。普通委托授权和本轮授权不会自动扩大。委托详情的 `maskedCommandGrant` 指向这次扩展授权的审批；撤销委托授权时一并撤销。历史记录仅包含脱敏预览。
+
 列表通常接受 limit 和 offset。活动列表可按 goalId、runId、provider、severity、type、search 过滤。活动不带 cursor 时逆序，带 cursor 时返回该序号以后的事件并升序排列。故事证据支持 until，以便重现历史快照。
 
 实时流的 change 消息使用 SQLite 序号作为 SSE id，data 含事件和目标标识。首次连接可传 cursor，自动重连优先读取 Last-Event-ID。需要完整数据时通过活动和证据接口查询。心跳为 SSE 注释。
