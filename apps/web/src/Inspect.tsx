@@ -176,6 +176,11 @@ function Decision({ i }: { i: Data }) {
           <pre>{copy.raw}</pre>
         )}
       </details>
+      {open && !!i.allow_for_run && (
+        <p className="muted">
+          选择本轮授权后，这项委托接下来的命令和文件修改将自动获批，可能修改或删除文件。需要额外权限时会再询问。本轮结束或连接中断后授权失效。
+        </p>
+      )}
       {open ? (
         <div className="actions">
           {i.kind === "approval" ? (
@@ -187,6 +192,11 @@ function Decision({ i }: { i: Data }) {
               >
                 仅允许这一次
               </Action>
+              {!!i.allow_for_run && (
+                <Action disabled={busy || i.risk.includes("仅可拒绝")} run={() => decide("approve_run")}>
+                  允许本轮后续操作
+                </Action>
+              )}
               <Action disabled={busy} run={() => decide("deny")}>
                 拒绝
               </Action>
@@ -277,9 +287,10 @@ function Decision({ i }: { i: Data }) {
             <p key={a.id}>
               {dt(a.created)} ·{" "}
               {
-                (
+                a.actor === "run_grant" ? "按本轮授权自动批准" : (
                   {
                     approve: "批准",
+                    approve_run: "批准本次及本轮后续操作",
                     deny: "拒绝",
                     defer: "稍后处理",
                     answer: "已答复",

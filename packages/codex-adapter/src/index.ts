@@ -5,6 +5,7 @@ import { resolve, relative, isAbsolute, dirname } from "node:path";
 import { Rpc, type Packet } from "./rpc.ts";
 import {
   redact,
+  ApprovalScopeChanged,
   type AgentAdapter,
   type Context,
   type RunStatus,
@@ -63,7 +64,7 @@ type Session = {
   items: Map<string, ThreadItem>;
   requests: Map<
     string,
-    { id: string | number; canApprove: boolean; questions?: string[] }
+    { id: string | number; canApprove?: () => boolean; questions?: string[] }
   >;
 };
 function inside(root: string, path: string) {
@@ -208,7 +209,6 @@ export class CodexAdapter implements AgentAdapter {
         ) {
           s.requests.set(key, {
             id: p.id!,
-            canApprove: false,
             questions: questions.map((q) => q.id),
           });
           c.emit({
@@ -264,7 +264,7 @@ export class CodexAdapter implements AgentAdapter {
               changes: item?.type === "fileChange" ? item.changes : [],
               grantRoot: a.grantRoot,
             });
-        const canApprove =
+        const canApprove = () =>
           action === redact(action) &&
           (command
             ? !!a.command &&
@@ -280,7 +280,8 @@ export class CodexAdapter implements AgentAdapter {
                     !ch.kind.move_path ||
                     permittedFile(c.workspace, ch.kind.move_path)),
               ));
-        s.requests.set(key, { id: p.id!, canApprove: !!canApprove });
+        const allowed = canApprove();
+        s.requests.set(key, { id: p.id!, canApprove });
         c.emit({
           key: "request:" + key,
           type: "approval.requested",
@@ -292,7 +293,10 @@ export class CodexAdapter implements AgentAdapter {
             action: redact(action),
             reason: redact(a.reason || "此操作需要本次授权"),
             scope: c.workspace,
-            risk: canApprove ? "需审查" : "范围无法完整核验，仅可拒绝",
+            risk: allowed ? "需审查" : "范围无法完整核验，仅可拒绝",
+            allowForRun: allowed && !a.networkApprovalContext && !a.additionalPermissions &&
+              !a.grantRoot && (a.availableDecisions == null ||
+                (Array.isArray(a.availableDecisions) && a.availableDecisions.includes("accept"))),
           },
         });
       } else
@@ -446,8 +450,8 @@ export class CodexAdapter implements AgentAdapter {
     const s = this.sessions.get(id),
       entry = s?.requests.get(request);
     if (!s || s.rpc.closed || !entry) throw Error("请求已过期");
-    if (decision === "approve" && !entry.canApprove)
-      throw Error("操作范围无法完整核验");
+    if (decision === "approve" && !entry.canApprove?.())
+      throw new ApprovalScopeChanged("操作范围已改变，仅可拒绝");
     s.requests.delete(request);
     const result: CommandExecutionRequestApprovalResponse = {
       decision: decision === "approve" ? "accept" : "decline",

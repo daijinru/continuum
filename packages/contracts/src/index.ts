@@ -22,7 +22,7 @@ export const states = z.enum([
 ]);
 export const decisionInput = z
   .object({
-    decision: z.enum(["approve", "deny", "defer", "answer", "record"]),
+    decision: z.enum(["approve", "approve_run", "deny", "defer", "answer", "record"]),
     answers: z.record(line.max(1000)).optional(),
     observed: z.enum(["succeeded", "failed", "interrupted"]).optional(),
     note: line.optional(),

@@ -21,6 +21,8 @@
 
 新建目标提供 `title, description, criteria[], workspaceId, provider`。启动请求提供 UUID 格式的 `key`；携带 `continue:true` 可继续上次已有线程。审批答复提供 `decision, version, key`。审批使用 approve、deny、defer。输入类请求用 answer 和 answers。失联核对使用 record、observed 和 note。过期或并发竞争返回 409。输入错误及策略拒绝返回 422。
 
+当待处理审批返回 `allow_for_run: 1` 时，可提交 `decision: "approve_run"`。它批准当前请求，并允许同一轮 Codex 执行中符合条件的待批命令和文件修改。每次答复都会重新检查项目授权。额外权限和补充信息继续单独询问。自动批准的决策记录用 `actor: "run_grant"` 标记，记录详情中的 `grant` 指向用户最初批准的请求。运行结束、断线或工作台重启后授权失效。
+
 列表通常接受 limit 和 offset。活动列表可按 goalId、runId、provider、severity、type、search 过滤。活动不带 cursor 时逆序，带 cursor 时返回该序号以后的事件并升序排列。故事证据支持 until，以便重现历史快照。
 
 实时流的 change 消息使用 SQLite 序号作为 SSE id，data 含事件和目标标识。首次连接可传 cursor，自动重连优先读取 Last-Event-ID。需要完整数据时通过活动和证据接口查询。心跳为 SSE 注释。

@@ -82,6 +82,7 @@ export class Store {
       "008_token_usage.sql",
       "009_project_authorizations.sql",
       "010_directory_holds.sql",
+      "011_run_approvals.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =
