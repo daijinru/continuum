@@ -187,7 +187,7 @@ export function Head({
         <h1>{title}</h1>
         {sub && <p>{sub}</p>}
       </div>
-      <div className="actions">{children}</div>
+      {children && <div className="actions">{children}</div>}
     </header>
   );
 }

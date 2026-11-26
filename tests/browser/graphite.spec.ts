@@ -38,7 +38,7 @@ test("石墨灰主对话：系统外观、定向回复、问进度与键盘焦�
   await field.fill("只关注离线工具");
   await field.press("Meta+Enter");
   await expect(page.locator(".reply-context")).toHaveCount(0);
-  expect(posts[0]).toMatchObject({ replyTo: id, text: "只关注离线工具" });
+  await expect.poll(() => posts[0]).toMatchObject({ replyTo: id, text: "只关注离线工具" });
   await field.fill("未发出的草稿");
   await page.getByRole("button", { name: "问进度" }).click();
   await expect.poll(() => posts.length).toBe(2);

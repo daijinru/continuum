@@ -82,6 +82,7 @@ test("工作台流程、主题、移动端、七个验收截图与控制台", as
   await page.getByRole("button", { name: "创建目标" }).click();
   await expect(page.getByRole("heading", { name: "浏览器验收" })).toBeVisible();
   await page.getByRole("button", { name: "开始运行" }).click();
+  await page.getByRole("button", { name: "管理委托" }).click();
   await expect(page.getByRole("button", { name: "中断本轮" })).toBeVisible();
   await page.getByRole("button", { name: "跟进目标" }).click();
   await page.getByLabel("发到主对话").fill("进度怎么样了？");

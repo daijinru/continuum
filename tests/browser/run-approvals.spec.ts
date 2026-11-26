@@ -104,6 +104,7 @@ test("在待处理审批授予跨轮权限，能从委托详情撤销", async ({
     page.getByRole("button", { name: "允许本轮后续操作" }),
   ).toHaveCount(0);
   await page.getByRole("link", { name: sample.goal, exact: true }).click();
+  await page.getByRole("button", { name: "管理委托" }).click();
   await expect(
     page.getByRole("link", { name: "查看原始授权" }),
   ).toHaveAttribute("href", "#inbox/" + sample.id);

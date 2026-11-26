@@ -39,7 +39,7 @@ export function Preference({
   );
 }
 
-export function Delivery({ r }: { r: Data }) {
+export function Delivery({ r, inGoal = false }: { r: Data; inGoal?: boolean }) {
   const [edit, setEdit] = useState(false);
   const parts = String(r.summary).split(/\n\s*\n/);
   // Keep a short, usable excerpt with source links; don't split Markdown tables.
@@ -50,19 +50,23 @@ export function Delivery({ r }: { r: Data }) {
         parts.slice(0, i + 1).join("\n\n").length > 950),
   );
   return (
-    <article className="panel pad delivery">
+    <article className="delivery">
       <div className="meta">
-        <time>{dt(r.updated)}</time> ·{" "}
-        {r.provider === "demo" ? "演示回复" : "助手交付"}
+        <time dateTime={r.updated}>{dt(r.updated)}</time>
+        {!r.native && (
+          <span>{r.provider === "demo" ? "演示回复" : "助手交付"}</span>
+        )}
       </div>
-      <h3>
-        <a href={"#goal/" + r.goal_id}>{r.goal}</a>
-      </h3>
+      {!inGoal && (
+        <h3>
+          <a href={"#goal/" + r.goal_id}>{r.goal}</a>
+        </h3>
+      )}
       <Markdown
         text={parts.slice(0, split < 0 ? undefined : split).join("\n\n")}
       />
       {split >= 0 && (
-        <details>
+        <details className="read-more">
           <summary>展开完整结果</summary>
           <Markdown text={parts.slice(split).join("\n\n")} />
         </details>
@@ -73,8 +77,14 @@ export function Delivery({ r }: { r: Data }) {
             打开计划室
           </a>
         )}
-        <button onClick={() => setEdit(true)}>修改下次要求</button>
-        <a href={"#run/" + r.run_id}>查看依据</a>
+        {r.native ? (
+          <a href={"#chat/" + r.goal_id}>在主对话中继续</a>
+        ) : (
+          <>
+            <button onClick={() => setEdit(true)}>修改下次要求</button>
+            <a href={"#run/" + r.run_id}>查看依据</a>
+          </>
+        )}
       </div>
       {edit && <Preference goalId={r.goal_id} close={() => setEdit(false)} />}
     </article>

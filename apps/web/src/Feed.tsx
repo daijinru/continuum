@@ -179,6 +179,7 @@ export function Today() {
             <button
               key={k}
               className={win === k && !snapshot ? "selected" : ""}
+              aria-pressed={win === k && !snapshot}
               onClick={() => {
                 setWin(k);
                 setSnapshot("");
@@ -278,16 +279,9 @@ export function Today() {
                       {title} <i>{rows.length}</i>
                     </h2>
                   </div>
-                  <div className="panel">
+                  <div className="panel record-list">
                     {rows.map((s: Data) =>
-                      s.native ? (
-                        <article key={s.id} className="panel pad">
-                          <h3>{s.goal}</h3>
-                          <time>{dt(s.updated)}</time>
-                          <Markdown text={s.summary} />
-                          <a href={"#chat/" + s.goal_id}>在主对话中继续</a>
-                        </article>
-                      ) : s.delivery ? (
+                      s.native || s.delivery ? (
                         <Delivery key={s.id} r={s} />
                       ) : (
                         <Story key={s.id} s={s} until={b.end_seq} digest />
