@@ -8,6 +8,7 @@ import { recordUsage } from "./usage.ts";
 import { reportRun, post } from "./main-conversation.ts";
 import {
   type AgentAdapter,
+  ApprovalScopeChanged,
   type Context,
   type Observation,
   type RunStatus,
@@ -35,6 +36,9 @@ export class Service {
   bus = new EventEmitter();
   closed = false;
   deciding = new Set<string>();
+  // A live run may reuse one explicit grant. A restarted or disconnected
+  // execution must obtain a new one. The decision history stays in SQLite.
+  private runGrants = new Map<string, string>();
   adapters: Record<string, AgentAdapter>;
   demo: DemoAdapter;
   constructor(db: Store, delay = 400) {
@@ -365,7 +369,7 @@ export class Service {
       if (e.approval && !r.finished && r.status !== "unknown") {
         const a = e.approval;
         db.run(
-          "INSERT OR IGNORE INTO inbox_items(id,goal_id,run_id,request_id,status,title,action,reason,scope,risk,created,expires,kind,blocking) VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?,?,?)",
+          "INSERT OR IGNORE INTO inbox_items(id,goal_id,run_id,request_id,status,title,action,reason,scope,risk,created,expires,kind,blocking,allow_for_run) VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?)",
           uid(),
           r.goal_id,
           id,
@@ -381,6 +385,7 @@ export class Service {
             : new Date(Date.now() + 3600000).toISOString(),
           a.kind || "approval",
           a.blocking === false ? 0 : 1,
+          Number(!!a.allowForRun && r.provider === "codex" && (a.kind ?? "approval") === "approval"),
         );
       }
       if (e.type === "provider.request_closed")
@@ -441,23 +446,20 @@ export class Service {
         reportRun(db, r, target, e.title);
       if (e.approval && !r.finished && r.status !== "unknown") {
         const item = db.one(
-          "SELECT id FROM inbox_items WHERE run_id=? AND request_id=?",
+          "SELECT * FROM inbox_items WHERE run_id=? AND request_id=?",
           id,
           e.approval.id,
         );
-        if (item)
-          post(
-            db,
-            "assistant",
-            "question",
-            `${e.title}\n\n${e.approval.reason}`,
-            [r.goal_id],
-            "inbox:" + item.id,
-          );
+        if (item?.status === "pending" && !(item.allow_for_run && this.runGrants.has(id)))
+          this.askAbout(item);
       }
       return event;
     });
     if (result) {
+      if (this.runGrants.has(id)) {
+        const current = this.run(id);
+        if (current.finished || current.status === "unknown") this.runGrants.delete(id);
+      }
       if (
         (["run.completed", "run.failed", "run.interrupted"].includes(e.type) ||
           (e.type === "system.reconciled" && this.run(id).finished)) &&
@@ -471,7 +473,35 @@ export class Service {
     }
     return result;
   }
-  async decide(id: string, body: unknown) {
+  private askAbout(item: Row) {
+    post(
+      this.db, "assistant", "question", `${item.title}\n\n${item.reason}`,
+      [item.goal_id], "inbox:" + item.id,
+    );
+  }
+  async applyRunApprovals() {
+    for (const [runId, grant] of this.runGrants) {
+      const pending = this.db.all(
+        "SELECT id,version FROM inbox_items WHERE run_id=? AND status='pending' AND allow_for_run=1 ORDER BY created,rowid",
+        runId,
+      );
+      for (const item of pending) {
+        if (this.deciding.has(item.id)) continue;
+        try {
+          await this.decide(item.id, { decision: "approve", key: uid(), version: item.version }, grant);
+        } catch (e) {
+          if (!(e instanceof Problem)) throw e;
+          const current = this.inbox(item.id);
+          if (
+            current.status === "pending" &&
+            !this.db.one("SELECT 1 FROM main_messages WHERE origin=?", "inbox:" + current.id)
+          )
+            this.db.tx(() => this.askAbout(current));
+        }
+      }
+    }
+  }
+  async decide(id: string, body: unknown, grant?: string) {
     const d = decisionInput.parse(body),
       db = this.db,
       item = this.inbox(id),
@@ -493,7 +523,7 @@ export class Service {
     )
       throw new Problem("审批状态已变化，请刷新", 409);
     const choices: Record<string, string[]> = {
-      approval: ["approve", "deny", "defer"],
+      approval: ["approve", "approve_run", "deny", "defer"],
       input: ["answer", "defer"],
       decision: ["record", "defer"],
     };
@@ -517,15 +547,24 @@ export class Service {
       this.expire(item);
       throw new Problem("请求已过期", 409);
     }
-    if (d.decision === "approve") {
-      db.allowed(this.goal(run.goal_id).workspace_id);
+    const approving = d.decision === "approve" || d.decision === "approve_run";
+    if (approving) {
+      const goal = this.goal(run.goal_id);
+      const workspace = db.allowed(goal.workspace_id);
       if (item.risk.includes("仅可拒绝"))
         throw new Problem("无法完整显示请求范围");
+      if (d.decision === "approve_run" || grant) {
+        if (
+          !item.allow_for_run || item.scope !== workspace || goal.state !== "active" ||
+          run.finished || run.status === "unknown" || (grant && this.runGrants.get(run.id) !== grant)
+        )
+          throw new Problem("这项请求当前不能使用本轮授权。", 409);
+      }
     }
     this.deciding.add(id);
     try {
       if (
-        d.decision === "approve" ||
+        approving ||
         d.decision === "deny" ||
         d.decision === "answer"
       ) {
@@ -534,8 +573,12 @@ export class Service {
           if (d.decision === "answer") {
             if (!adapter.answer) throw Error("unsupported_capability");
             await adapter.answer(run.id, item.request_id, d.answers!);
-          } else await adapter.respond(run.id, item.request_id, d.decision);
-        } catch {
+          } else await adapter.respond(run.id, item.request_id, approving ? "approve" : "deny");
+        } catch (error) {
+          if (error instanceof ApprovalScopeChanged) {
+            db.run("UPDATE inbox_items SET allow_for_run=0,risk=?,version=version+1 WHERE id=? AND status IN " + open, error.message, id);
+            throw new Problem(error.message, 409);
+          }
           this.expire(item);
           throw new Problem("提供方无法接收答复，请核对运行状态", 409);
         }
@@ -546,6 +589,7 @@ export class Service {
           (
             {
               approve: "approved",
+              approve_run: "approved",
               deny: "denied",
               defer: "deferred",
               answer: "resolved",
@@ -556,7 +600,7 @@ export class Service {
         );
         db.run(
           "INSERT INTO audit_log(actor,action,target,key,detail,created) VALUES(?,?,?,?,?,?)",
-          "user",
+          grant ? "run_grant" : "user",
           d.decision,
           id,
           d.key,
@@ -564,12 +608,17 @@ export class Service {
             version: d.version,
             run: run.id,
             request: item.request_id,
+            grant,
             note: d.note ? redact(d.note) : undefined,
             observed: d.observed,
           }),
           now(),
         );
       });
+      if (d.decision === "approve_run") {
+        const current = this.run(run.id);
+        if (!current.finished && current.status !== "unknown") this.runGrants.set(run.id, id);
+      }
       if (d.decision === "record")
         this.event(run.id, {
           key: "manual:" + d.key,
@@ -585,7 +634,8 @@ export class Service {
         type:
           d.decision === "defer" ? "approval.deferred" : "approval.resolved",
         title: {
-          approve: "已批准本次操作",
+          approve: grant ? "已按本轮授权允许操作" : "已批准本次操作",
+          approve_run: "已允许本轮后续命令和文件修改",
           deny: "已拒绝本次操作",
           defer: "审批已稍后处理",
           answer: "已提交补充信息",

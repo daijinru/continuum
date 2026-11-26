@@ -48,9 +48,12 @@ export type Observation = {
     risk: string;
     kind?: "approval" | "input";
     blocking?: boolean;
+    allowForRun?: boolean;
   };
 };
 export type Sink = (event: Observation) => void;
+// The provider still has a live request that can be declined.
+export class ApprovalScopeChanged extends Error {}
 export type TokenCounts = { input: number; output: number; total: number };
 export type Context = {
   id: string;

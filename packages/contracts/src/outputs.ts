@@ -58,6 +58,7 @@ const item = row({
   request_id: str,
   action: str,
   kind: z.enum(["approval", "input", "decision"]),
+  allow_for_run: z.union([z.literal(0), z.literal(1)]),
   status: str,
   version: z.number().int(),
 });
