@@ -1,5 +1,6 @@
-import { now, uid, type Row } from "../../api/src/db.ts";
+import { DirectoryUnavailable, now, uid, type Row } from "../../api/src/db.ts";
 import type { Service } from "../../api/src/service.ts";
+import { checkRestoredDirectories } from "../../api/src/directory-recovery.ts";
 import { generate } from "../../../packages/briefing/src/index.ts";
 export class Worker {
   service: Service;
@@ -67,8 +68,9 @@ export class Worker {
         if (Date.now() - Date.parse(r.created) > limits.maxMinutes * 60000)
           await s.adapters[r.provider].interrupt(r.id).catch(() => {});
       }
+      checkRestoredDirectories(db);
       for (const msg of db.all(
-        "SELECT m.* FROM user_messages m JOIN goals g ON g.id=m.goal_id JOIN workspaces w ON w.id=g.workspace_id AND w.enabled=1 WHERE m.status IN('queued','dispatching') AND g.state='active' ORDER BY m.created LIMIT 20",
+        "SELECT m.* FROM user_messages m JOIN dispatchable_goals g ON g.id=m.goal_id WHERE m.status IN('queued','dispatching') ORDER BY m.created LIMIT 20",
       )) {
         const previous = db.one(
           "SELECT * FROM agent_runs WHERE goal_id=? AND key=?",
@@ -92,38 +94,34 @@ export class Worker {
           continue;
         // An earlier dispatch in this batch may have yielded while the user disabled the project.
         const claimed = db.run(
-          `UPDATE user_messages SET status='dispatching' WHERE id=? AND EXISTS
-           (SELECT 1 FROM goals g JOIN workspaces w ON w.id=g.workspace_id
-             WHERE g.id=user_messages.goal_id AND g.state='active' AND w.enabled=1)`,
+          `UPDATE user_messages SET status='dispatching' WHERE id=? AND status IN('queued','dispatching')
+           AND goal_id IN (SELECT id FROM dispatchable_goals)`,
           msg.id,
         );
         if (!claimed.changes) continue;
-        const source = msg.source_run
-          ? db.one(
-              "SELECT id,thread_id FROM agent_runs WHERE id=? AND goal_id=?",
-              msg.source_run,
-              msg.goal_id,
-            )
-          : null;
         try {
           const run = await s.start(
             msg.goal_id,
             msg.id,
             msg.content,
-            !!source?.thread_id,
-            source?.id,
+            false,
+            "queue",
           );
           db.run(
             "UPDATE user_messages SET status='sent',run_id=? WHERE id=?",
             run.id,
             msg.id,
           );
-        } catch {
-          db.run("UPDATE user_messages SET status='failed' WHERE id=?", msg.id);
+        } catch (e) {
+          db.run(
+            "UPDATE user_messages SET status=? WHERE id=?",
+            e instanceof DirectoryUnavailable ? "queued" : "failed",
+            msg.id,
+          );
         }
       }
       const jobs = db.all(
-        "SELECT j.* FROM schedule_jobs j JOIN goals g ON g.id=j.goal_id JOIN workspaces w ON w.id=g.workspace_id AND w.enabled=1 WHERE g.state='active' AND j.state='enabled' AND j.next_at<=? AND (j.lease_until IS NULL OR j.lease_until<=?) ORDER BY j.next_at LIMIT 10",
+        "SELECT j.* FROM schedule_jobs j JOIN dispatchable_goals g ON g.id=j.goal_id WHERE j.state='enabled' AND j.next_at<=? AND (j.lease_until IS NULL OR j.lease_until<=?) ORDER BY j.next_at LIMIT 10",
         stamp,
         stamp,
       );
@@ -151,8 +149,7 @@ export class Worker {
       owner = uid();
     const claimed = db.run(
       `UPDATE schedule_jobs SET lease=?,lease_until=? WHERE id=? AND state='enabled' AND next_at=?
-       AND (lease_until IS NULL OR lease_until<=?) AND EXISTS (SELECT 1 FROM goals g
-         JOIN workspaces w ON w.id=g.workspace_id WHERE g.id=schedule_jobs.goal_id AND g.state='active' AND w.enabled=1)`,
+       AND (lease_until IS NULL OR lease_until<=?) AND goal_id IN (SELECT id FROM dispatchable_goals)`,
       owner,
       new Date(Date.now() + 120000).toISOString(),
       job.id,
@@ -197,7 +194,7 @@ export class Worker {
           );
           return;
         }
-        await s.start(job.goal_id, key, job.instruction);
+        await s.start(job.goal_id, key, job.instruction, false, "schedule");
       }
       db.run(
         "UPDATE schedule_jobs SET state=?,next_at=?,lease=NULL,lease_until=NULL,attempts=0,last_error=NULL,last_run=? WHERE id=? AND lease=? AND state='enabled'",
@@ -208,6 +205,14 @@ export class Worker {
         owner,
       );
     } catch (e) {
+      if (e instanceof DirectoryUnavailable) {
+        db.run(
+          "UPDATE schedule_jobs SET lease=NULL,lease_until=NULL WHERE id=? AND lease=?",
+          job.id,
+          owner,
+        );
+        return;
+      }
       const issued = !!db.one(
         "SELECT 1 FROM agent_runs WHERE goal_id=? AND key=?",
         job.goal_id,

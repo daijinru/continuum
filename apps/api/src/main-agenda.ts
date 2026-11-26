@@ -71,7 +71,7 @@ export class MainAgenda {
     const { db } = this.s;
     const due = db.all(
       `SELECT t.*,g.title,g.description,g.constraints_json,g.updated FROM main_tasks t JOIN goals g ON g.id=t.goal_id
-      JOIN workspaces w ON w.id=g.workspace_id WHERE g.state='active' AND (t.mode!='work' OR w.enabled=1) AND t.next_at<=? ORDER BY t.next_at`,
+      WHERE g.state='active' AND (t.mode!='work' OR g.id IN (SELECT id FROM dispatchable_goals)) AND t.next_at<=? ORDER BY t.next_at`,
       at.toISOString(),
     );
     for (const t of due) {
@@ -106,6 +106,23 @@ export class MainAgenda {
                 t.goal_id,
               );
           } else {
+            // The original dispatch already covers work that was due while
+            // its directory was unavailable. Resume the normal cadence.
+            if (
+              t.cadence !== "once" &&
+              db.one(
+                "SELECT 1 FROM directory_holds WHERE goal_id=? AND resolved_at>=? LIMIT 1",
+                t.goal_id,
+                t.next_at,
+              )
+            ) {
+              db.run(
+                "UPDATE main_tasks SET next_at=? WHERE goal_id=?",
+                this.next(t, at),
+                t.goal_id,
+              );
+              return;
+            }
             const limits = {
               ...this.s.config(),
               ...JSON.parse(

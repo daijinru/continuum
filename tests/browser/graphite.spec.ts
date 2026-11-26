@@ -92,3 +92,52 @@ test("主输入框不选目录，首次项目授权在对应消息内完成", as
   await expect(page.getByLabel("项目目录的绝对路径")).toHaveCount(0);
   expect(confirmed).toBe(true);
 });
+
+test("在目录提醒中为当前委托确认新位置", async ({ page }) => {
+  const id = "20000000-0000-4000-8000-000000000003";
+  let confirmed = false;
+  await page.route("**/api/v1/conversation", (route) =>
+    route.fulfill({
+      json: {
+        data: [
+          {
+            id,
+            seq: 1,
+            role: "assistant",
+            kind: "directory",
+            created: "2026-11-25T01:02:00Z",
+            refs: [{ id, title: "更新说明" }],
+            body: "更新说明还没开始，项目文件夹找不到。",
+            directoryPath: "/example/old",
+            canRecover: 1,
+            resolvedBy: confirmed ? id : null,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/v1/conversation/directories/" + id, (route) => {
+    const payload = route.request().postDataJSON();
+    if (!payload.path)
+      return route.fulfill({
+        status: 422,
+        json: { error: "项目文件夹找不到或无法访问" },
+      });
+    expect(payload).toEqual({ path: "/example/new" });
+    confirmed = true;
+    return route.fulfill({ json: { data: { id } } });
+  });
+  await page.goto("/");
+  await expect(page.getByText("/example/old")).toBeVisible();
+  await page.getByRole("button", { name: "原目录已恢复，继续" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "项目文件夹找不到或无法访问",
+  );
+  await page.getByRole("button", { name: "更换这项委托的目录" }).click();
+  await page.getByLabel("项目目录的绝对路径").fill("/example/new");
+  await page.getByRole("button", { name: "确认新位置并继续" }).click();
+  await expect(page.getByText("目录已确认")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "确认新位置并继续" }),
+  ).toHaveCount(0);
+});

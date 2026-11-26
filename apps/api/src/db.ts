@@ -1,5 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
+  accessSync,
+  constants,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -18,15 +20,19 @@ export class Problem extends Error {
     this.statusCode = statusCode;
   }
 }
+// An unavailable stored location can be recovered before dispatch. A disabled
+// workspace is a separate user decision and must never enter this retry path.
+export class DirectoryUnavailable extends Problem {}
 export function directory(path: string) {
   if (!isAbsolute(path) || path.split("/").includes(".."))
     throw new Problem("请输入无上级跳转的绝对目录");
   try {
     const real = realpathSync(path);
     if (!statSync(real).isDirectory()) throw Error();
+    accessSync(real, constants.R_OK | constants.X_OK);
     return real;
   } catch {
-    throw new Problem("目录不存在或无法访问");
+    throw new DirectoryUnavailable("项目文件夹找不到或无法访问");
   }
 }
 export function verifiedFile(root: string, path: string) {
@@ -75,6 +81,7 @@ export class Store {
       "007_main_conversation.sql",
       "008_token_usage.sql",
       "009_project_authorizations.sql",
+      "010_directory_holds.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =
@@ -142,10 +149,15 @@ export class Store {
       AND g.state NOT IN ('completed','archived')) affected
       FROM authorized_projects p JOIN workspaces w ON w.id=p.workspace_id ORDER BY w.name,w.path`);
   }
-  allowed(id: string) {
+  enabledWorkspace(id: string) {
     const w = this.must("SELECT * FROM workspaces WHERE id=?", id);
-    if (!w.enabled || directory(w.path) !== w.path)
-      throw new Problem("项目目录已停用或路径已改变");
+    if (!w.enabled) throw new Problem("项目已停用，请先在设置中重新启用。");
+    return w;
+  }
+  allowed(id: string) {
+    const w = this.enabledWorkspace(id);
+    if (directory(w.path) !== w.path)
+      throw new DirectoryUnavailable("项目文件夹指向的位置已改变");
     return w.path as string;
   }
   close() {

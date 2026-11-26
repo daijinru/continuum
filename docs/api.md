@@ -15,6 +15,7 @@
 | 简报 | GET /briefings、/briefings/:id；POST /briefings/generate、/briefings/:id/acknowledge |
 | 收件箱 | GET /inbox、/inbox/:id；POST /inbox/:id/decision |
 | 跟进 | POST /chat/messages；目标详情返回指令历史 |
+| 主对话中的目录提醒 | `GET /conversation` 返回提醒及原路径。向 `POST /conversation/directories/:id` 传 `{}` 可立即检查原目录，传 `{"path":"/new/project"}` 可为这项委托确认新位置。`:id` 为提醒消息的 ID。同一提醒重试会返回已有处理结果。 |
 | 计划 | POST /goals/:id/schedules、/schedules/:id/stop；PATCH /goals/:id/limits |
 | 活动 | GET /activity、/stream |
 

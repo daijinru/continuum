@@ -311,9 +311,30 @@ test("定时任务租约、暂停、每日额度、重启幂等与失败退避",
   const dir = db.must("SELECT path FROM workspaces WHERE id=?", g.workspace_id).path;
   renameSync(dir, dir + "-moved");
   db.run("UPDATE workspaces SET enabled=1");
+  const due = jobs().next_at;
+  await worker.tick();
+  await worker.tick();
+  assert.equal(jobs().next_at, due);
+  assert.equal(jobs().attempts, 2);
+  assert.equal(jobs().lease_until, null);
+  assert.equal(db.all("SELECT * FROM directory_holds").length, 1);
+  assert.equal(count(), 2);
+  renameSync(dir + "-moved", dir);
+  // Once the folder is back, actual adapter failures still use the existing policy.
+  s.adapters.demo.start = async () => {
+    throw Error("执行器不可用");
+  };
   await worker.tick();
   assert.equal(jobs().attempts, 3);
   assert.equal(jobs().state, "paused");
+  assert.equal(
+    db.must(
+      "SELECT key FROM agent_runs WHERE goal_id=? AND key=?",
+      g.id,
+      "job:" + id + ":" + due,
+    ).key,
+    "job:" + id + ":" + due,
+  );
 });
 test("本机同源、会话、输入校验和生成协议", async (t) => {
   const { app, token } = await setup(t);

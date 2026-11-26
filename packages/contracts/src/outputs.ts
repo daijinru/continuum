@@ -115,6 +115,7 @@ export const outputs: Record<string, ZodTypeAny> = {
   ),
   "POST /conversation/messages": row({ id }),
   "POST /conversation/projects/:id": row({ id }),
+  "POST /conversation/directories/:id": row({ id }),
   "GET /session": row({ token: str }),
   "GET /health": row({ ready: z.boolean(), instance: id }),
   "POST /system/restart": z.object({ instance: id, accepted: z.literal(true) }),
