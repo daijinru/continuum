@@ -15,7 +15,7 @@
 | 简报 | GET /briefings、/briefings/:id；POST /briefings/generate、/briefings/:id/acknowledge |
 | 收件箱 | GET /inbox、/inbox/:id；POST /inbox/:id/decision |
 | 跟进 | POST /chat/messages；目标详情返回指令历史 |
-| 主对话消息 | `POST /conversation/messages` 接受消息和唯一的 `key`，确认后返回已保存的 `id`、`seq`、`created`、`body`。重试沿用原 key 和回复对象。 |
+| 主对话消息 | `POST /conversation/messages` 接受 `text`、唯一的 UUID `key`，以及可选的回复消息 ID `replyTo` 或委托 ID `focus`。成功后返回已保存的 `id`、`seq`、`created`、`body`。重试沿用原请求。读取历史与更新见[主对话同步](#主对话同步)。 |
 | 主对话审批 | `GET /conversation` 将已提醒的操作审批按委托汇总，返回委托 ID、总数、待处理数及下一项待办 ID。用 `GET /conversation/approvals/:id` 按委托读取明细，每页 30 条，`before` 取上一页最后一条的 `seq`。 |
 | 主对话中的目录提醒 | `GET /conversation` 返回提醒及原路径。向 `POST /conversation/directories/:id` 传 `{}` 可立即检查原目录，传 `{"path":"/new/project"}` 可为这项委托确认新位置。`:id` 为提醒消息的 ID。同一提醒重试会返回已有处理结果。 |
 | 计划 | POST /goals/:id/schedules、/schedules/:id/stop；PATCH /goals/:id/limits |
@@ -31,4 +31,12 @@
 
 列表通常接受 limit 和 offset。活动列表可按 goalId、runId、provider、severity、type、search 过滤。活动不带 cursor 时逆序，带 cursor 时返回该序号以后的事件并升序排列。故事证据支持 until，以便重现历史快照。
 
-实时流的 change 消息使用 SQLite 序号作为 SSE id，data 含事件和目标标识。首次连接可传 cursor，自动重连优先读取 Last-Event-ID。需要完整数据时通过活动和证据接口查询。心跳为 SSE 注释。
+## 主对话同步
+
+1. **打开主对话。** `GET /conversation` 在 `data` 数组中返回最近最多 80 行，按 `seq` 从小到大排列。同一委托的操作审批合为一行。保存响应头 `X-Conversation-Version`，后续用它追更新。
+2. **翻看更早的消息。** `GET /conversation?before=<当前最早一行的 seq>` 返回严格早于该行的一页，顺序相同。把结果加在列表前面，继续沿用原来的变更版本。
+3. **补上变化。** `GET /stream` 在连接、重连和主对话变化时发送 `conversation` 事件，`data` 是当前变更版本。如果版本有差异，用上次已同步的版本请求 `GET /conversation/changes?since=<version>`。响应的 `data` 含 `rows`、`version`、`more`。按消息 `id` 合并，审批汇总按委托 `approvalGoal` 合并。每次处理后保存返回的 `version`，只要 `more` 为真就用它继续读。审批汇总可能把多条变更合成一行，不能用行数判断是否读完。
+
+例如，页面上已有一行操作审批。用户在另一个标签页处理后，`rows` 可以只返回更新后的汇总行。按 `approvalGoal` 替换原行就能显示最新待处理数。
+
+同一条 SSE 连接也发送活动流的 `change` 事件，其 `id` 是原始活动的 SQLite 序号，`data` 含事件和目标标识。活动重放支持首次连接的 `cursor` 及重连的 `Last-Event-ID`。主对话的 `conversation` 事件只带版本数据，两种进度分别保存。心跳为 SSE 注释。
