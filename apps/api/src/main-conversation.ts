@@ -59,13 +59,26 @@ export const stamp = (date: string) =>
 export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER): Row[] {
   return db
     .all(
-      `SELECT m.*, json_extract(q.intent,'$.project') project, coalesce(q.resolved_by,h.resolved_by) resolvedBy,
+      `WITH notices AS (
+        SELECT m.seq,i.goal_id,i.status FROM inbox_items i
+        JOIN main_messages m ON m.origin='inbox:'||i.id WHERE i.kind='approval'
+      ), groups AS (
+        SELECT goal_id,max(seq) latest,count(*) total,
+          sum(status IN ('pending','deferred')) pending,
+          min(CASE WHEN status IN ('pending','deferred') THEN seq END) first_pending
+        FROM notices GROUP BY goal_id
+      )
+      SELECT m.*, a.goal_id approvalGoal,a.total approvalTotal,a.pending approvalPending,
+      substr(p.origin,7) nextApproval, json_extract(q.intent,'$.project') project, coalesce(q.resolved_by,h.resolved_by) resolvedBy,
       h.resolved_at directoryResolvedAt,
       w.path directoryPath, (g.state='active' AND w.enabled=1) canRecover,
       coalesce((SELECT json_group_array(json_object('id',g.id,'title',g.title)) FROM goals g JOIN main_refs r ON r.goal_id=g.id WHERE r.message_id=m.id),'[]') refs
     FROM main_messages m LEFT JOIN main_project_questions q ON q.message_id=m.id
     LEFT JOIN directory_holds h ON h.notice_id=m.id LEFT JOIN workspaces w ON w.id=h.workspace_id
-    LEFT JOIN goals g ON g.id=h.goal_id WHERE m.seq<? ORDER BY m.seq DESC LIMIT 80`,
+    LEFT JOIN goals g ON g.id=h.goal_id
+    LEFT JOIN notices n ON n.seq=m.seq LEFT JOIN groups a ON a.goal_id=n.goal_id
+    LEFT JOIN main_messages p ON p.seq=a.first_pending
+    WHERE m.seq<? AND (n.seq IS NULL OR m.seq=a.latest) ORDER BY m.seq DESC LIMIT 80`,
       before,
     )
     .reverse()

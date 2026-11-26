@@ -133,9 +133,16 @@ export async function createServer(
   get("/conversation", ({ q }) =>
     timeline(db, q.before ? offset({ offset: q.before }) : undefined),
   );
-  post("/conversation/messages", ({ body }) =>
-    conversation.send(sendInput.parse(body)),
-  );
+  get("/conversation/approvals/:id", ({ id, q }) => db.all(
+    `SELECT i.id,i.status,i.title,i.created,m.seq FROM inbox_items i
+     JOIN main_messages m ON m.origin='inbox:'||i.id
+     WHERE i.goal_id=? AND i.kind='approval' AND m.seq<? ORDER BY m.seq DESC LIMIT 30`,
+    id, q.before ? offset({offset: q.before}) : Number.MAX_SAFE_INTEGER,
+  ));
+  post("/conversation/messages", async ({ body }) => {
+    const { id } = await conversation.send(sendInput.parse(body));
+    return db.must("SELECT id,seq,created,body FROM main_messages WHERE id=?", id);
+  });
   post("/conversation/projects/:id", ({ id, body }) =>
     conversation.resolveProject(id, projectDecision.parse(body)),
   );
@@ -438,7 +445,7 @@ export async function createServer(
     ),
   );
   get("/inbox/:id", ({ id }) => ({
-    ...s.inbox(id),
+    ...db.must("SELECT i.*,g.title goal,r.provider FROM inbox_items i JOIN goals g ON g.id=i.goal_id JOIN agent_runs r ON r.id=i.run_id WHERE i.id=?", id),
     audit: db.all(
       "SELECT * FROM audit_log WHERE target=? ORDER BY id DESC",
       id,

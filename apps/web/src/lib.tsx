@@ -22,6 +22,7 @@ export async function api(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await res.json();
+  if (res.status === 403 && method !== "GET") token = "";
   if (!res.ok) throw Error(value.error || "请求失败");
   return value.data;
 }

@@ -207,3 +207,64 @@ test("执行器未确认或授权过程中项目被更换，不能为以后各�
   await f.post("/goals/" + goal.id, { state: "active" }, "PATCH");
   assert.equal(f.api.s.goalGrant(goal.id), null);
 });
+
+test("主对话折叠同委托审批后再分页，补充信息独立显示，可以打开历史请求", async (t) => {
+  const f = await fixture(t);
+  const first = f.goal(),
+    second = f.goal();
+  const run = await f.api.s.start(first.id, uid());
+  const other = await f.api.s.start(second.id, uid());
+  const requests = Array.from({ length: 105 }, (_, i) =>
+    f.request(run.id, "要核对的操作 " + i),
+  );
+  f.request(other.id, "另一委托的操作");
+  f.api.s.event(run.id, {
+    key: "question",
+    type: "input.requested",
+    title: "需要补充信息",
+    approval: {
+      id: "input",
+      kind: "input",
+      action: "[]",
+      reason: "选择格式",
+      scope: f.w.path,
+      risk: "需补充信息",
+    },
+  });
+  const get = async (url: string) => {
+    const res = await f.api.app.inject("/api/v1" + url);
+    assert.equal(res.statusCode, 200);
+    return res.json().data;
+  };
+  const feed = await get("/conversation");
+  const group = feed.find((r: any) => r.approvalGoal === first.id);
+  assert.equal(feed.filter((r: any) => r.approvalGoal).length, 2);
+  assert.equal(group.approvalTotal, 105);
+  assert.equal(group.approvalPending, 105);
+  assert.equal(group.nextApproval, requests[0].id);
+  assert.equal(feed.at(-1).body.includes("选择格式"), true);
+  assert.ok(
+    (await get("/conversation?before=" + group.seq)).every(
+      (r: any) => !r.approvalGoal,
+    ),
+  );
+  const path = "/conversation/approvals/" + first.id;
+  const rows = await get(path);
+  assert.equal(rows.length, 30);
+  assert.equal(rows[0].id, requests.at(-1)!.id);
+  const page2 = await get(path + "?before=" + rows.at(-1).seq);
+  assert.equal(page2[0].id, requests[74].id);
+  await f.api.s.decide(requests[0].id, {
+    decision: "deny",
+    key: uid(),
+    version: 1,
+  });
+  const updated = (await get("/conversation")).find(
+    (r: any) => r.approvalGoal === first.id,
+  );
+  assert.equal(updated.approvalPending, 104);
+  assert.equal(updated.nextApproval, requests[1].id);
+  const detail = await get("/inbox/" + requests[0].id);
+  assert.equal(detail.goal, first.title);
+  assert.equal(detail.status, "denied");
+});
