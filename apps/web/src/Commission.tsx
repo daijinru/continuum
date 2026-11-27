@@ -72,11 +72,6 @@ export function Delivery({ r, inGoal = false }: { r: Data; inGoal?: boolean }) {
         </details>
       )}
       <div className="links">
-        {r.workspace === "planroom" && (
-          <a href="http://127.0.0.1:4320/" target="_blank" rel="noreferrer">
-            打开计划室
-          </a>
-        )}
         {r.native ? (
           <a href={"#chat/" + r.goal_id}>在主对话中继续</a>
         ) : (

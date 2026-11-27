@@ -609,7 +609,7 @@ export function Settings() {
         >
           <label>
             项目名称（选填）
-            <input name="name" maxLength={160} placeholder="例如：计划室" />
+            <input name="name" maxLength={160} placeholder="例如：工作笔记" />
           </label>
           <ProjectFolder canChoose={d.service.canChooseFolder} />
           <button>授权项目</button>
