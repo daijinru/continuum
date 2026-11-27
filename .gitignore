@@ -9,3 +9,4 @@ test-results/
 *.sqlite*
 packages/codex-adapter/schema/*
 !packages/codex-adapter/schema/ClientRequest.json
+apps/desktop/dist/
