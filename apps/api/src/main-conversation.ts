@@ -97,26 +97,35 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: 
     .reverse()
     .map((m) => ({ ...m, quote: m.quote && JSON.parse(m.quote), refs: JSON.parse(m.refs) }));
 }
+function currentRunScope(db: Store, r: Row, checkPreferences: boolean) {
+  const goal = db.must("SELECT state,constraints_json FROM goals WHERE id=?", r.goal_id);
+  if (goal.state === "paused" || goal.state === "archived") return false;
+  if (!checkPreferences) return true;
+  const scope = db.one("SELECT constraints_json FROM main_run_scope WHERE run_id=?", r.id);
+  return !scope || goal.constraints_json === scope.constraints_json;
+}
+
+export function deliverUpdate(db: Store, r: Row, event: Row) {
+  if (r.finished || r.status === "unknown" || !currentRunScope(db, r, true)) return;
+  const question = JSON.parse(event.payload).followup;
+  const body = question && !event.title.includes(question) ? event.title + "\n\n" + question : event.title;
+  post(db, "assistant", question ? "question" : "update", body, [r.goal_id], "event:" + event.id, null, event.id);
+}
+
 export function reportRun(db: Store, r: Row, type: string, title: string) {
-  const g = db.must("SELECT * FROM goals WHERE id=?", r.goal_id);
-  // Only new terminal events create conversation messages, never a replay of old history.
-  if (g.state === "paused" || g.state === "archived") return;
-  const scope = db.one(
-    "SELECT constraints_json FROM main_run_scope WHERE run_id=?",
-    r.id,
-  );
-  if (
-    type === "succeeded" &&
-    scope &&
-    scope.constraints_json !== g.constraints_json
-  )
-    return;
+  if (!currentRunScope(db, r, type === "succeeded")) return;
   if (type === "succeeded" || type === "failed" || type === "interrupted") {
     const last = db.one(
-      "SELECT title,json_extract(payload,'$.followup') question FROM raw_events WHERE run_id=? AND type='agent.message' ORDER BY seq DESC LIMIT 1",
+      "SELECT id,title,json_extract(payload,'$.followup') question,json_extract(payload,'$.delivery') delivery FROM raw_events WHERE run_id=? AND type='agent.message' ORDER BY seq DESC LIMIT 1",
       r.id,
     );
     const question = type === "succeeded" && last?.question;
+    if (type === "succeeded" && last?.delivery === "async") {
+      // The turn may end directly after an explicitly delivered message.
+      if (question && db.one("SELECT 1 FROM main_messages WHERE id=?", last.id))
+        db.run("INSERT OR IGNORE INTO followup_questions(message_id,run_id,question) VALUES(?,?,?)", last.id, r.id, question);
+      return;
+    }
     const body = type === "succeeded"
       ? last?.title || "本轮已结束，没有可阅读的回复。"
       : `本轮${type === "interrupted" ? "已中断" : "未完成"}：${title}`;
@@ -125,7 +134,7 @@ export function reportRun(db: Store, r: Row, type: string, title: string) {
       "assistant",
       question ? "question" : type === "succeeded" ? "result" : "problem",
       question && !body.includes(question) ? body + "\n\n" + question : body,
-      [g.id],
+      [r.goal_id],
       "run:" + r.id,
     );
     if (question)
@@ -226,9 +235,9 @@ export function progress(db: Store, g: Row) {
   ) {
     facts.push("本次工作已排队，等待开始");
   } else if (r) {
-    const waiting = r.finished && !disabled && g.state === "active" && waitingFor(db, r.id);
+    const waiting = !disabled && g.state === "active" && waitingFor(db, r.id);
     if (waiting)
-      return g.title + "：" + (waiting.last_answer ? "已收到「" + String(waiting.last_answer).slice(0, 140) + "」。" : "") +
+      return g.title + "：" + (r.finished ? "" : (labels[r.status] || r.status) + "。") + (waiting.last_answer ? "已收到「" + String(waiting.last_answer).slice(0, 140) + "」。" : "") +
         "正在等你补充：" + waiting.question;
     facts.push(labels[r.status] || r.status);
     const e = db.one(
@@ -685,7 +694,7 @@ export class MainConversation {
           if (!answerFollowup(db, target, user, text, missing))
             answers.push("原问题当前不能继续接收资料。" + progress(db, this.s.goal(target.goal)));
           else if (!missing)
-            answers.push("资料已收到，已排队继续原委托。");
+            answers.push(this.s.run(target.run).finished ? "资料已收到，已排队继续原委托。" : "资料已收到，已排队在当前运行结束后继续原委托。");
           continue;
         }
         if (a.type === "talk" || a.type === "clarify") {

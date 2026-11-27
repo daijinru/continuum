@@ -6,7 +6,7 @@ import { DirectoryUnavailable, Store, now, uid, Problem, type Row } from "./db.t
 import { holdDirectory, pendingDirectory } from "./directory-recovery.ts";
 import { followupInstruction } from "./followups.ts";
 import { recordUsage } from "./usage.ts";
-import { reportRun, post } from "./main-conversation.ts";
+import { deliverUpdate, reportRun, post } from "./main-conversation.ts";
 import {
   type AgentAdapter,
   ApprovalScopeChanged,
@@ -453,6 +453,7 @@ export class Service {
       db.run("UPDATE goals SET updated=? WHERE id=?", stamp, r.goal_id);
       db.run("UPDATE agent_runs SET heartbeat=? WHERE id=?", stamp, id);
       projectStory(db, r, event, e);
+      if (e.type === "agent.message" && e.data?.delivery === "async") deliverUpdate(db, r, event);
       if (!r.finished && target && this.run(id).finished)
         reportRun(db, r, target, e.title);
       if (e.approval && !r.finished && r.status !== "unknown") {
