@@ -134,9 +134,16 @@ function GoalForm({ close }: { close: () => void }) {
     </Modal>
   );
 }
+const goalsViewKey = "continuum-goals-view";
+const goalsViews = { compact: "紧凑视图", detailed: "详细视图" } as const;
+
 export function Goals() {
   const { data, error } = useData("/goals"),
     [creating, set] = useState(false);
+  const [view, setView] = useState<keyof typeof goalsViews>(() =>
+    localStorage.getItem(goalsViewKey) === "detailed" ? "detailed" : "compact",
+  );
+  const detailed = view === "detailed";
   return (
     <>
       <Head
@@ -149,36 +156,57 @@ export function Goals() {
           交代一件事
         </button>
       </Head>
+      <div className="tabs goals-view" role="group" aria-label="委托列表视图">
+        {(["compact", "detailed"] as const).map((mode) => (
+          <button
+            key={mode}
+            className={view === mode ? "selected" : ""}
+            aria-pressed={view === mode}
+            onClick={() => {
+              setView(mode);
+              localStorage.setItem(goalsViewKey, mode);
+            }}
+          >
+            {goalsViews[mode]}
+          </button>
+        ))}
+      </div>
       {!data ? (
         <Status error={error} />
       ) : !data.length ? (
         <div className="empty">创建第一个工作目标</div>
       ) : (
-        <div className="panel record-list">
+        <div className="panel record-list" data-view={view}>
           {data.map((g) => (
             <a className="goalcard" href={"#goal/" + g.id} key={g.id}>
-              <div className="tile">
-                <Target />
-              </div>
+              {detailed && (
+                <div className="tile">
+                  <Target />
+                </div>
+              )}
               <div className="grow">
-                <div className="meta">
-                  <Provider value={g.provider} />
-                  <span>{g.workspace}</span>
-                </div>
-                <h2>{g.title}</h2>
-                <div className="meta">
-                  {
-                    (
-                      {
-                        at_risk: "有待解决的风险",
-                        on_track: "按计划推进",
-                        blocked: "目标受阻",
-                        unknown: "等待工作证据",
-                      } as Record<string, string>
-                    )[g.health]
-                  }
-                </div>
-                {distinctDescription(g) && <p>{g.description}</p>}
+                {detailed && (
+                  <div className="meta">
+                    <Provider value={g.provider} />
+                    <span>{g.workspace}</span>
+                  </div>
+                )}
+                <h2 title={g.title}>{g.title}</h2>
+                {detailed && (
+                  <div className="meta">
+                    {
+                      (
+                        {
+                          at_risk: "有待解决的风险",
+                          on_track: "按计划推进",
+                          blocked: "目标受阻",
+                          unknown: "等待工作证据",
+                        } as Record<string, string>
+                      )[g.health]
+                    }
+                  </div>
+                )}
+                {detailed && distinctDescription(g) && <p>{g.description}</p>}
                 <div className="meta">
                   {g.pending
                     ? "等待审批 · " + g.pending + " 项"

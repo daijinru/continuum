@@ -664,6 +664,20 @@ time {
   color: var(--ink);
   overflow-wrap: anywhere;
 }
+.goals-view {
+  margin-bottom: 12px;
+}
+[data-view="compact"] > .goalcard {
+  align-items: center;
+  padding: 8px 14px;
+}
+[data-view="compact"] > .goalcard h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+}
 .goalcard:hover { background: var(--side); }
 .record-list > :first-child { border-start-start-radius: inherit; border-start-end-radius: inherit; }
 .record-list > :last-child { border-end-start-radius: inherit; border-end-end-radius: inherit; }
