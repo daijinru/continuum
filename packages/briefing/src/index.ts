@@ -150,7 +150,8 @@ export function reports(
     FROM raw_events e JOIN agent_runs r ON r.id=e.run_id JOIN goals g ON g.id=r.goal_id JOIN workspaces w ON w.id=g.workspace_id
     JOIN raw_events m ON m.seq=(SELECT max(x.seq) FROM raw_events x
       WHERE x.run_id=r.id AND x.type='agent.message' AND x.seq<=e.seq)
-    WHERE r.status='succeeded' AND (e.type='run.completed' OR
+    WHERE NOT EXISTS (SELECT 1 FROM followup_questions f WHERE f.run_id=r.id)
+      AND r.status='succeeded' AND (e.type='run.completed' OR
       (e.type='system.reconciled' AND json_extract(e.payload,'$.status')='succeeded'))
       AND e.seq=(SELECT min(y.seq) FROM raw_events y WHERE y.run_id=r.id AND
         (y.type='run.completed' OR (y.type='system.reconciled' AND json_extract(y.payload,'$.status')='succeeded')))

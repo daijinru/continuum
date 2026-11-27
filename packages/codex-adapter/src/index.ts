@@ -140,11 +140,13 @@ export class CodexAdapter implements AgentAdapter {
         : await rpc.call("thread/start", policy);
       s.thread = result.thread.id;
       c.reference(result.thread.id);
+      const instruction = [c.instruction];
+      if (c.managedCommission)
+        instruction.push("在委托目录内自行完成日常步骤，不请求提权，不绕过沙箱。若资料不可得，直接说明未完成的部分和需要用户提供的资料，不要让用户确认命令。仅当用户需要决定业务取舍时提出具体问题。");
+      instruction.push("若本轮因缺少用户资料而停止，在最终回复末尾另起一行写「待补充：」和要用户回答的一个具体问题。可选建议不使用这一行。");
       const started = await rpc.call("turn/start", {
         threadId: result.thread.id,
-        input: [{ type: "text", text: c.managedCommission
-          ? c.instruction + "\n\n在委托目录内自行完成日常步骤，不请求提权，不绕过沙箱。若资料不可得，直接说明未完成的部分和需要用户提供的资料，不要让用户确认命令。仅当用户需要决定业务取舍时提出具体问题。"
-          : c.instruction, text_elements: [] }],
+        input: [{ type: "text", text: instruction.join("\n\n"), text_elements: [] }],
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: "user",
         sandboxPolicy: {
@@ -440,13 +442,18 @@ export class CodexAdapter implements AgentAdapter {
         });
       return;
     }
-    if (item.type === "agentMessage")
+    if (item.type === "agentMessage") {
+      const question = item.phase === "commentary" ? undefined :
+        item.questions?.map(q => q.title).join("；") ||
+        /(?:^|\n)待补充[：:]\s*([^\n]+)$/.exec(item.text.trim())?.[1];
       c.emit({
         key,
         type: "agent.message",
-        title: redact(item.text) || "Codex 消息",
+        title: redact(item.text) || question || "Codex 消息",
+        data: question ? { followup: redact(question) } : undefined,
         method,
       });
+    }
     if (item.type === "commandExecution") {
       const suite =
         /^(?:npm test|pnpm test|cargo test|pytest|python3? -m pytest|go test \.\/\.\.\.)$/.test(
