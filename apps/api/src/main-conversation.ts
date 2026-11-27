@@ -1,3 +1,5 @@
+import { attachImages } from "./chat-images.ts";
+import { maxImages } from "../../../packages/contracts/src/chat-images.ts";
 import { z } from "zod";
 import { post } from "./main-messages.ts";
 import { pendingDirectory, releaseDirectory } from "./directory-recovery.ts";
@@ -24,11 +26,12 @@ export { post } from "./main-messages.ts";
 export const sendInput = z
   .object({
     key: z.string().uuid(),
-    text: z.string().trim().min(1).max(4000),
+    text: z.string().trim().max(4000),
+    images: z.array(z.string().uuid()).min(1).max(maxImages).optional(),
     replyTo: z.string().uuid().optional(),
     focus: z.string().uuid().optional(),
   })
-  .strict();
+  .strict().refine(input => !!input.text || !!input.images?.length, "请填写消息或粘贴图片");
 export const projectDecision = z.discriminatedUnion("kind", [
   z
     .object({
@@ -76,6 +79,7 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: 
         WHEN selected.id IS NOT NULL THEN json_object('type','goal','id',selected.id,'text',selected.title)
       END quote,
       substr(p.origin,7) nextApproval, json_extract(q.intent,'$.project') project, coalesce(q.resolved_by,h.resolved_by) resolvedBy,
+      (SELECT json_group_array(id ORDER BY position) FROM conversation_images WHERE message_id=m.id) images,
       h.resolved_at directoryResolvedAt,
       w.path directoryPath, (g.state='active' AND w.enabled=1) canRecover,
       coalesce((SELECT json_group_array(json_object('id',g.id,'title',g.title)) FROM goals g JOIN main_refs r ON r.goal_id=g.id WHERE r.message_id=m.id),'[]') refs
@@ -95,7 +99,7 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: 
       ...(changed ? [JSON.stringify(changed)] : []),
     )
     .reverse()
-    .map((m) => ({ ...m, quote: m.quote && JSON.parse(m.quote), refs: JSON.parse(m.refs) }));
+    .map((m) => ({ ...m, images: JSON.parse(m.images), quote: m.quote && JSON.parse(m.quote), refs: JSON.parse(m.refs) }));
 }
 function currentRunScope(db: Store, r: Row, checkPreferences: boolean) {
   const goal = db.must("SELECT state,constraints_json FROM goals WHERE id=?", r.goal_id);
@@ -418,6 +422,7 @@ export class MainConversation {
       if (
         previous.role !== "user" ||
         previous.body !== text ||
+        JSON.stringify(db.all("SELECT id FROM conversation_images WHERE message_id=? ORDER BY position", b.key).map(i => i.id)) !== JSON.stringify(b.images ?? []) ||
         previous.reply_to !== (b.replyTo || null) ||
         (previous.reply_goal && previous.reply_goal !== b.focus)
       )
@@ -427,6 +432,34 @@ export class MainConversation {
     const reply = b.replyTo
       ? db.must("SELECT * FROM main_messages WHERE id=?", b.replyTo)
       : undefined;
+    if (b.images?.length) {
+      const images = b.images;
+      const instruction = text || "请分析随消息发送的图片。";
+      return db.tx(() => {
+        const related = reply ? db.all("SELECT goal_id FROM main_refs WHERE message_id=?", reply.id) : [];
+        if (!b.focus && related.length > 1) throw new Problem("请先选择要接收图片的委托");
+        const question = reply ?? db.one("SELECT * FROM main_messages ORDER BY seq DESC LIMIT 1");
+        const followup = question && (reply || question.kind === "question") ? followupFor(db, question) : undefined;
+        const target = b.focus ?? related[0]?.goal_id ?? followup?.goal;
+        const goal = target ? this.s.goal(target) : this.s.createCommission(instruction, b.key);
+        const user = post(db, "user", "message", text, [goal.id], "in:" + b.key, b.replyTo ?? null, b.key, b.focus ?? null);
+        attachImages(db, user, images);
+        if (target) {
+          const mode = db.one("SELECT mode FROM main_tasks WHERE goal_id=?", target)?.mode;
+          if (goal.state !== "active" || goal.provider !== "codex" || (mode && mode !== "work"))
+            throw new Problem("请选择可继续执行的 Codex 委托，或取消关联后发送图片");
+          if (followup && followup.goal === target) {
+            if (!answerFollowup(db, followup, user, instruction))
+              throw new Problem("原问题当前不能接收资料，请取消关联后发送图片");
+          } else {
+            const prior = db.one("SELECT id FROM agent_runs WHERE goal_id=? AND thread_id IS NOT NULL ORDER BY created DESC,rowid DESC LIMIT 1", target);
+            db.run("INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status,source_run) VALUES(?,?,'goal',?,?,?,'queued',?)", user,target,target,instruction,now(),prior?.id ?? null);
+          }
+        }
+        post(db, "assistant", "ack", "已收到图片，已排队分析。", [goal.id], "ack:" + user, user);
+        return { id: user };
+      });
+    }
     if (b.focus) this.s.goal(b.focus);
     // A bare project name can answer the last request only when it has a
     // single open question. Explicit replies also work after other messages.

@@ -1571,3 +1571,14 @@ dialog::backdrop {
     transition: none;
   }
 }
+
+.chat-image-list { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 6px; }
+.draft-image { position: relative; }
+.draft-image img { width: 78px; height: 60px; object-fit: cover; border: 1px solid var(--line); }
+.draft-image button { position: absolute; right: 0; top: 0; padding: 2px; background: var(--bg); }
+.image-preview { padding: 0; border: 0; background: transparent; cursor: zoom-in; vertical-align: middle; }
+.image-preview img { display: block; max-width: min(100%, 300px); max-height: 180px; object-fit: contain; }
+.image-dialog { max-width: 96vw; max-height: 96vh; padding: 12px; background: var(--bg); }
+.image-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.image-dialog img { display: block; max-width: 90vw; max-height: 80vh; object-fit: contain; }
+.image-dialog button { display: block; margin: 0 0 6px auto; }

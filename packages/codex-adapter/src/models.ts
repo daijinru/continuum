@@ -12,11 +12,12 @@ type Entry = Pick<
   | "defaultReasoningEffort"
   | "isDefault"
 >;
+type CatalogModel = Entry & Pick<Model, "inputModalities">;
 export type ModelChoice = { model?: string; effort?: string };
 
-async function readModels(rpc: Rpc, provider?: string): Promise<Entry[]> {
+async function readModels(rpc: Rpc, provider?: string): Promise<CatalogModel[]> {
   const deadline = Date.now() + 3500;
-  const models: Entry[] = [];
+  const models: CatalogModel[] = [];
   const cursors = new Set<string>();
   let cursor: string | null = null;
   do {
@@ -52,7 +53,7 @@ async function readModels(rpc: Rpc, provider?: string): Promise<Entry[]> {
 
 // A short-lived directory lookup is shared by concurrent readers. Its failure
 // never closes a live execution connection. No prompts are sent by this process.
-const cached = new Map<string, { until: number; items: Promise<Entry[]> }>();
+const cached = new Map<string, { until: number; items: Promise<CatalogModel[]> }>();
 export function expireCatalog(provider?: string, cwd?: string) {
   cached.delete(JSON.stringify([provider, cwd]));
 }
@@ -60,7 +61,7 @@ export function modelCatalog(
   provider?: string,
   cwd?: string,
   live?: Rpc,
-): Promise<Entry[]> {
+): Promise<CatalogModel[]> {
   const key = JSON.stringify([provider, cwd]);
   const time = Date.now();
   for (const [k, entry] of cached) if (entry.until <= time) cached.delete(k);

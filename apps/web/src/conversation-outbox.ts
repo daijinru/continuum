@@ -7,6 +7,7 @@ import { redact } from "../../../packages/agent-core/src/index.ts";
 type Submission = {
   key: string;
   text: string;
+  images?: string[];
   replyTo?: string;
   focus?: string;
 };
@@ -148,6 +149,7 @@ export function outgoingRow(entry: Entry): Data {
     created: entry.created,
     seq: entry.seq ?? Infinity,
     refs: [],
+    images: entry.submission.images,
     quote: entry.quote,
     delivery: entry.status,
     error: entry.error,
