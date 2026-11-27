@@ -1,4 +1,5 @@
 import { replyQuote } from "./reply-quote.ts";
+import { conversationLogEntry } from "./conversation-log.ts";
 import { z, type ZodTypeAny } from "zod";
 import { monitor, runProgress, workStatus } from "./monitor.ts";
 const id = z.string().uuid(),
@@ -139,6 +140,7 @@ export const outputs: Record<string, ZodTypeAny> = {
   "GET /conversation/run-progress": runProgress,
   "GET /conversation/work-status": workStatus,
   "POST /conversation/log": z.boolean(),
+  "GET /conversation/log": z.array(conversationLogEntry),
   "GET /agent-connections": z.array(connection),
   "POST /agent-connections/check": row({
     installed: z.boolean(),

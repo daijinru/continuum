@@ -158,6 +158,10 @@ export async function createServer(
      WHERE i.goal_id=? AND i.kind='approval' AND m.seq<? ORDER BY m.seq DESC LIMIT 30`,
     id, q.before ? offset({offset: q.before}) : Number.MAX_SAFE_INTEGER,
   ));
+  get("/conversation/log", () => db.all(
+    `SELECT seq, at, stage, page_id, message_id, version, client_at
+     FROM conversation_log ORDER BY seq DESC LIMIT 100`,
+  ));
   post("/conversation/log", ({ body }) => {
     const batch = pageLog.parse(body);
     db.tx(() => {

@@ -28,6 +28,20 @@ const key = () => crypto.randomUUID();
 const after = (at: string) => new Date(new Date(at).getTime() + 1000);
 const fixture = () => mkdtempSync(join(tmpdir(), "continuum-main-"));
 
+test("日志查看器按写入顺序只读取最近一百条", async (t) => {
+  const { app, db } = await createServer({ home: fixture(), worker: false, seed: false });
+  t.after(() => app.close());
+  const read = async () => (await app.inject("/api/v1/conversation/log")).json().data;
+  assert.deepEqual(await read(), []);
+  db.tx(() => {
+    for (let i = 0; i < 101; i++) db.run("INSERT INTO conversation_log(stage) VALUES('received')");
+  });
+  const rows = await read();
+  assert.deepEqual(rows.map((row: { seq: number }) => row.seq), Array.from({ length: 100 }, (_, i) => 101 - i));
+  assert.equal(rows[0].client_at, null);
+  assert.deepEqual(await read(), rows);
+});
+
 test("一个主对话：复合承诺、幂等提交、静默、单项回复、确定性提醒与重启恢复", async () => {
   const home = fixture(),
     api = await createServer({ home, worker: false, seed: false });
