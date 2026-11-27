@@ -252,6 +252,18 @@ nav i {
 .surface {
   min-width: 0;
 }
+.dev-update {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding: 8px clamp(16px, 3.5vw, 50px);
+  background: var(--side);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
 .topbar {
   height: 46px;
   border-bottom: 1px solid var(--line);

@@ -22,6 +22,7 @@ let replaceLauncher = false;
 let port = process.env.PORT || "0";
 let hidden = process.env.CONTINUUM_DEV_HIDDEN === "1";
 let hash = process.env.CONTINUUM_DEV_HASH || "";
+let updated = process.env.CONTINUUM_DEV_UPDATED === "1";
 let lastAssets = new Set();
 
 function schedule(delay = 180) {
@@ -85,6 +86,7 @@ function launch() {
       CONTINUUM_DEV_WEB_DIST: site,
       CONTINUUM_DEV_HIDDEN: hidden ? "1" : "0",
       CONTINUUM_DEV_HASH: hash,
+      CONTINUUM_DEV_UPDATED: updated ? "1" : "0",
     },
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
@@ -98,6 +100,7 @@ function launch() {
       port = msg.port;
     } else if (msg.type === "dev-relaunch") {
       relaunch = true;
+      updated = true;
       hidden = msg.hidden;
       hash = msg.hash;
     }
@@ -190,6 +193,7 @@ async function update() {
           PORT: port,
           CONTINUUM_DEV_HIDDEN: hidden ? "1" : "0",
           CONTINUUM_DEV_HASH: hash,
+          CONTINUUM_DEV_UPDATED: updated ? "1" : "0",
         },
       );
     }

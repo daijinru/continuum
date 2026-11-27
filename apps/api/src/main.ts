@@ -1,10 +1,20 @@
 import { createServer } from "./server.ts";
 const execve = process.execve;
 let closing = false;
-async function shutdown(restart: boolean) {
+async function shutdown(restart: boolean, interruptRuns = false) {
   if (closing) return;
   closing = true;
   try {
+    if (interruptRuns) {
+      const runs = db.all(
+        "SELECT id,provider FROM agent_runs WHERE finished IS NULL",
+      );
+      await Promise.allSettled([
+        worker.stop(),
+        agenda.stop(),
+        ...runs.map((run) => s.adapters[run.provider].interrupt(run.id)),
+      ]);
+    }
     await app.close();
     if (process.send) {
       // The desktop parent owns restarts and waits for the old database owner.
@@ -33,7 +43,7 @@ async function shutdown(restart: boolean) {
 const devWebDist = process.send
   ? process.env.CONTINUUM_DEV_WEB_DIST
   : undefined;
-const { app, db, agenda } = await createServer({
+const { app, db, agenda, worker, s } = await createServer({
   webDist: devWebDist,
   seed: process.env.CONTINUUM_SEED !== "0",
   restart:
@@ -61,6 +71,7 @@ if (process.send) {
     };
     process.on("message", (msg) => {
       if (msg === "dev-stop-when-idle") stopWhenIdle();
+      if (msg === "dev-interrupt-and-stop") void shutdown(false, true);
     });
   }
   process.once("disconnect", () => void shutdown(false));

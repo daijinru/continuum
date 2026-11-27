@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   nativeImage,
   shell,
@@ -33,6 +34,9 @@ let wantWindow = true,
 let crashes = [];
 let serviceEnv;
 let restartRequested = false;
+let confirmingUpdate = false;
+let forcingUpdate = false;
+let justUpdated = process.env.CONTINUUM_DEV_UPDATED === "1";
 
 function environment() {
   const path = join(profile, "workbench.json");
@@ -70,6 +74,9 @@ function showWindow() {
       width: 1180,
       height: 820,
       webPreferences: {
+        preload: supervised
+          ? join(import.meta.dirname, "dev-preload.cjs")
+          : undefined,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -106,6 +113,8 @@ function startService() {
       ? process.env.npm_node_execpath || "node"
       : join(root, "bin/node"),
     execArgv: [],
+    // A confirmed update may have to stop this service and its remaining tools.
+    detached: supervised && process.platform === "darwin",
     cwd: root,
     env: serviceEnv,
     stdio: ["ignore", "inherit", "inherit", "ipc"],
@@ -122,7 +131,6 @@ function startService() {
       process.send({ type: "dev-ready", port: url.port });
       if (restartRequested) {
         proc.send("dev-stop-when-idle");
-        return;
       }
     }
     if (wantWindow) showWindow();
@@ -171,6 +179,73 @@ function relaunchDevelopment() {
     },
     stopWorkbench,
   );
+}
+
+function isWorkbenchFrame(event) {
+  const frame = event.senderFrame;
+  return (
+    !!win &&
+    event.sender === win.webContents &&
+    !!frame &&
+    frame === win.webContents.mainFrame &&
+    URL.canParse(frame.url) &&
+    new URL(frame.url).origin === address
+  );
+}
+
+async function confirmImmediateUpdate(event) {
+  const proc = child;
+  if (
+    !isWorkbenchFrame(event) ||
+    !restartRequested ||
+    !proc ||
+    quitting ||
+    confirmingUpdate ||
+    forcingUpdate
+  )
+    return;
+  confirmingUpdate = true;
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "warning",
+      message: "立即重启更新？",
+      detail:
+        "立即重启会中断正在执行的委托。选择「继续等待」，委托结束后会自动更新。",
+      buttons: ["继续等待", "中断委托并重启"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (
+      response !== 1 ||
+      child !== proc ||
+      proc.exitCode !== null ||
+      proc.signalCode !== null ||
+      quitting ||
+      !isWorkbenchFrame(event)
+    )
+      return;
+    forcingUpdate = true;
+    win.webContents.send("dev-update:state", "restarting");
+    // Give adapters time to record an interruption. Bound the wait if an
+    // executor, source check or model call is stuck during shutdown.
+    const terminate = () => {
+      try {
+        if (process.platform === "darwin") process.kill(-proc.pid, "SIGKILL");
+        else proc.kill("SIGKILL");
+      } catch (err) {
+        if (err.code !== "ESRCH")
+          console.error("开发服务未能停止", err.message);
+      }
+    };
+    const deadline = setTimeout(terminate, 2000);
+    proc.once("exit", () => {
+      clearTimeout(deadline);
+      if (process.platform === "darwin") terminate();
+    });
+    if (proc.connected) proc.send("dev-interrupt-and-stop");
+  } finally {
+    confirmingUpdate = false;
+  }
 }
 
 async function quitWorkbench() {
@@ -267,10 +342,22 @@ else {
         !(supervised && process.env.CONTINUUM_DEV_HIDDEN === "1") &&
         !app.getLoginItemSettings().wasOpenedAtLogin;
       if (supervised) {
+        ipcMain.on("dev-update:subscribe", (event) => {
+          if (!isWorkbenchFrame(event)) return;
+          if (restartRequested)
+            event.reply(
+              "dev-update:state",
+              forcingUpdate ? "restarting" : "pending",
+            );
+          else if (justUpdated) event.reply("dev-update:state", "updated");
+          justUpdated = false;
+        });
+        ipcMain.handle("dev-update:request", confirmImmediateUpdate);
         process.on("message", (msg) => {
           if (msg.type === "dev-refresh") win?.webContents.reload();
           if (msg.type === "dev-restart" && !quitting && !restartRequested) {
             restartRequested = true;
+            win?.webContents.send("dev-update:state", "pending");
             if (!child) relaunchDevelopment();
             else if (address && child.connected)
               child.send("dev-stop-when-idle");

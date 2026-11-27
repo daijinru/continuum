@@ -60,11 +60,22 @@ try {
   await appendFile(
     path("scripts/desktop-dev-entry.mjs"),
     `
-    import { BrowserWindow } from "electron";
+    import { BrowserWindow, dialog } from "electron";
+    import assert from "node:assert/strict";
     import { existsSync, readFileSync, unlinkSync } from "node:fs";
     app.on("web-contents-created", (_event, contents) => {
       contents.on("did-finish-load", () => console.log("TEST page", contents.getTitle(), contents.getURL()));
     });
+    let updateChoice = 0;
+    dialog.showMessageBox = async (win, options) => {
+      assert.equal(win, BrowserWindow.getAllWindows()[0]);
+      assert.match(options.detail, /会中断正在执行的委托/);
+      assert.deepEqual(options.buttons, ["继续等待", "中断委托并重启"]);
+      assert.equal(options.defaultId, 0);
+      assert.equal(options.cancelId, 0);
+      console.log("TEST update confirmation", updateChoice);
+      return { response: updateChoice };
+    };
     setInterval(async () => {
       const control = process.env.TEST_CONTROL;
       if (!existsSync(control)) return;
@@ -79,7 +90,22 @@ try {
       if (action === "check-draft") {
         console.log("TEST draft", await win.webContents.executeJavaScript("localStorage.getItem('main-draft')"));
       }
+      if (action === "check-notice") {
+        console.log("TEST notice", await win.webContents.executeJavaScript('document.querySelector(".dev-update [role=status]")?.textContent ?? "none"'));
+      }
       if (action === "close") win.close();
+      if (action === "open") app.emit("activate");
+      if (action === "wait-update" || action === "force-update") {
+        updateChoice = Number(action === "force-update");
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          const clicked = await win.webContents.executeJavaScript(
+            '(() => { const b = document.querySelector(".dev-update button"); if (b?.textContent === "立即重启更新") { b.click(); return true; } })()'
+          );
+          if (clicked) break;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
       if (action === "quit") { console.log("TEST windows", BrowserWindow.getAllWindows().length); app.quit(); }
     }, 100).unref();
   `,
@@ -135,6 +161,8 @@ try {
     html.replace(/<title>.*?<\/title>/, "<title>updated</title>"),
   );
   await logged("TEST page updated " + url + "/#today");
+  await command("check-notice");
+  await logged("TEST notice none");
   assert.equal((await api("health")).instance, instance);
   console.log(
     "前端构建失败保留旧页面，修复后窗口自动刷新，服务实例和页面位置一致。",
@@ -144,8 +172,27 @@ try {
   const main = path("apps/api/src/main.ts");
   await appendFile(main, '\nconsole.log("TEST backend updated");\n');
   await logged("等待当前委托结束");
+  await command("wait-update");
+  await logged("TEST update confirmation 0");
   assert.equal((await api("health")).instance, instance);
-  await appendFile(main, '\nconsole.log("TEST latest save");\n');
+  assert.equal(
+    (await api("runs/" + approval.run_id)).status,
+    "waiting_approval",
+  );
+  await appendFile(
+    main,
+    `
+    import { spawn } from "node:child_process";
+    process.on("message", msg => {
+      if (msg !== "dev-interrupt-and-stop") return;
+      // A stuck subprocess would keep the old service alive after graceful shutdown.
+      const helper = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)"], {stdio:"ignore"});
+      console.log("TEST stuck helper", helper.pid);
+      helper.once("exit", () => console.log("TEST helper returned naturally"));
+    });
+    console.log("TEST latest save");
+  `,
+  );
   const { token } = await api("session");
   await api("inbox/" + approval.id + "/decision", {
     method: "POST",
@@ -167,10 +214,56 @@ try {
 
   await command("check-draft");
   await logged("TEST draft 开发会话草稿");
+  await command("check-notice");
+  await logged("TEST notice 开发版已更新。");
+  const second = await api("goals/" + approval.goal_id + "/start", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-continuum-token": (await api("session")).token,
+    },
+    body: JSON.stringify({ key: crypto.randomUUID() }),
+  });
+  await until(
+    async () => (await api("runs/" + second.id)).status === "waiting_approval",
+    "临时委托等待审批",
+  );
   await command("close");
   await until(
     async () => (await readFile(control).catch(() => null)) === null,
     "关窗",
+  );
+  const beforeForce = (await api("health")).instance;
+  await appendFile(main, '\nconsole.log("TEST forced update loaded");');
+  await until(
+    () => log.split("等待当前委托结束").length >= 3,
+    "后台等待第二次更新",
+  );
+  await command("open");
+  await until(
+    () => log.includes("TEST page updated " + url + "/\n"),
+    "重新打开窗口",
+  );
+  await command("force-update");
+  await logged("TEST update confirmation 1");
+  await logged("TEST forced update loaded");
+  assert.notEqual((await api("health")).instance, beforeForce);
+  assert.equal((await api("runs/" + second.id)).status, "interrupted");
+  const helperPid = Number(/TEST stuck helper (\d+)/.exec(log)?.[1]);
+  assert.ok(helperPid > 0);
+  assert.throws(() => process.kill(helperPid, 0), { code: "ESRCH" });
+  assert.ok(!log.includes("TEST helper returned naturally"));
+  await until(
+    () => log.split("TEST page updated " + url + "/\n").length >= 3,
+    "立即更新后重新打开窗口",
+  );
+  console.log(
+    "取消后委托照常完成；关窗重开后可确认提前更新，中断记录已保留，卡住的子进程已退出。",
+  );
+  await command("close");
+  await until(
+    async () => (await readFile(control).catch(() => null)) === null,
+    "关闭更新后的窗口",
   );
   const entry = path("apps/desktop/main.mjs");
   const source = await readFile(entry, "utf8");

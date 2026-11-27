@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { AppCtx } from "./lib.tsx";
 import { Monitor } from "./Monitor.tsx";
+import { DevUpdateNotice } from "./DevUpdateNotice.tsx";
 import { Today } from "./Feed.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Goal, Goals } from "./Goals.tsx";
@@ -225,6 +226,7 @@ function App() {
               </button>
             </div>
           </div>
+          {import.meta.env.MODE === "desktop-dev" && <DevUpdateNotice />}
           <main key={page}>
             {page === "chat" ? (
               <Conversation focus={id} />
