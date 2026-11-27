@@ -1248,6 +1248,31 @@ dialog::backdrop {
   background: var(--side);
   border-radius: 13px 13px 4px 13px;
 }
+.chat-message .reply-quote {
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 34em);
+  margin: 5px 0 8px;
+  padding: 3px 9px;
+  border: 0;
+  border-inline-start: 2px solid var(--muted);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: .85rem;
+  line-height: 1.45;
+  text-align: start;
+}
+.reply-quote strong { display: block; }
+.reply-quote span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.reply-quote:hover strong { text-decoration: underline; }
+.chat-row:focus { outline: 2px solid var(--muted); outline-offset: -2px; }
 .chat-message .meta {
   font-size: 12px;
   margin-bottom: 4px;

@@ -86,6 +86,7 @@ export class Store {
       "012_goal_approval_grants.sql",
       "013_command_review.sql",
       "014_conversation_changes.sql",
+      "015_main_reply_goal.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =

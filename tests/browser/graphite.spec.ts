@@ -179,6 +179,7 @@ test("慢响应时立即显示发送的消息，可继续输入，失败重试�
         role: "user",
         kind: "message",
         body: payload.text,
+        quote: { type: "message", id: reply, text: feed[0].body, role: "assistant", kind: "result", created: feed[0].created },
         refs: [],
       };
       feed.push(saved);
@@ -193,6 +194,8 @@ test("慢响应时立即显示发送的消息，可继续输入，失败重试�
   const bubble = page.locator("article.user").filter({ hasText: "再整理一次" });
   await expect(bubble).toBeVisible();
   await expect(bubble).toContainText("发送中");
+  const quote = bubble.getByRole("button", { name: /回复 Continuum.*整理已完成/ });
+  await expect(quote).toBeVisible();
   await expect(field).toHaveValue("");
   await expect(page.locator(".reply-context")).toHaveCount(0);
   await field.fill("下一条草稿");
@@ -200,6 +203,7 @@ test("慢响应时立即显示发送的消息，可继续输入，失败重试�
   await expect(bubble.getByRole("button", { name: "重试发送" })).toBeVisible();
   await page.reload();
   await expect(field).toHaveValue("下一条草稿");
+  await expect(quote).toBeVisible();
   await bubble.getByRole("button", { name: "重试发送" }).click();
   await expect.poll(() => posts.length).toBe(2);
   expect(posts[1]).toEqual(posts[0]);
@@ -207,6 +211,8 @@ test("慢响应时立即显示发送的消息，可继续输入，失败重试�
   await expect
     .poll(() => page.evaluate(() => sessionStorage.getItem("main-outbox")))
     .toBeNull();
+  await page.reload();
+  await expect(quote).toBeVisible();
   await expect(bubble).toHaveCount(1);
   await expect(bubble.getByRole("button", { name: "重试发送" })).toHaveCount(0);
   await expect(field).toHaveValue("下一条草稿");
@@ -334,4 +340,19 @@ test("连续发送立即上屏，按发送顺序提交，轮询先收到确认�
   await expect(bubbles).toHaveCount(2);
   await expect(bubbles.first()).toContainText("第一条");
   await expect(bubbles.last()).toContainText("第二条");
+});
+
+test("从委托继续对话，刷新后可通过引用回到同一委托", async ({ page, request }) => {
+  const [goal] = (await (await request.get("/api/v1/goals")).json()).data;
+  await page.goto("/#chat/" + goal.id);
+  await expect(page.locator(".reply-context")).toContainText(goal.title);
+  await page.getByRole("textbox", { name: "发到主对话" }).fill("进展怎么样了？");
+  const saved = page.waitForResponse(r => r.url().endsWith("/conversation/messages") && r.ok());
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await saved;
+  await page.reload();
+  const quote = page.locator("article.user").getByRole("link", { name: "回复委托 " + goal.title });
+  await expect(quote).toHaveAttribute("href", "#goal/" + goal.id);
+  await quote.click();
+  await expect(page.getByRole("heading", { name: goal.title, exact: true })).toBeVisible();
 });

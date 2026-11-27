@@ -161,3 +161,24 @@ test("窄屏在旧页填写的目录，滚出再回来仍然保留", async ({ pa
     "/example/project",
   );
 });
+
+test("刷新后从回复定位到尚未加载的原消息", async ({ page }) => {
+  const created = "2026-11-26T08:00:00Z";
+  const rows = Array.from({ length: 175 }, (_, i) => ({
+    id: "m-" + i, seq: i + 1, role: i === 174 ? "user" : "assistant",
+    kind: "message", created, body: "消息 " + i, refs: [],
+    quote: i === 174 ? { type: "message", id: "m-5", role: "assistant", kind: "message", created, text: "消息 5" } : null,
+  }));
+  await page.route(/\/api\/v1\/conversation(?:\?|$)/, r => {
+    const before = Number(new URL(r.request().url()).searchParams.get("before") ?? 176);
+    return r.fulfill({ headers: { "X-Conversation-Version": "175" },
+      json: { data: rows.filter(m => m.seq < before).slice(-80) } });
+  });
+  await page.route("**/conversation/changes?*", r =>
+    r.fulfill({ json: { data: { rows: [], more: false, version: 175 } } }));
+  await page.goto("/#chat");
+  await page.getByRole("button", { name: /回复 Continuum.*消息 5/ }).click();
+  const original = page.locator('[data-message-id="m-5"]');
+  await expect(original).toBeInViewport();
+  await expect(original).toBeFocused();
+});

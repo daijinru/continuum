@@ -1,3 +1,4 @@
+import type { ReplyQuote } from "./reply-quote.ts";
 import { useSyncExternalStore } from "react";
 import { api, type Data } from "./lib.tsx";
 import { redact } from "../../../packages/agent-core/src/index.ts";
@@ -10,6 +11,7 @@ type Submission = {
 };
 type Entry = {
   submission: Submission;
+  quote?: ReplyQuote;
   created: string;
   status: "queued" | "sending" | "failed" | "sent";
   error?: string;
@@ -108,11 +110,11 @@ async function deliver() {
   }
 }
 
-export function queueMessage(submission: Submission) {
+export function queueMessage(submission: Submission, quote?: ReplyQuote) {
   if (entries.some((entry) => entry.submission.key === submission.key)) return;
   publish([
     ...entries,
-    { submission, created: new Date().toISOString(), status: "queued" },
+    { submission, quote, created: new Date().toISOString(), status: "queued" },
   ]);
   void deliver();
 }
@@ -141,6 +143,7 @@ export function outgoingRow(entry: Entry): Data {
     created: entry.created,
     seq: entry.seq ?? Infinity,
     refs: [],
+    quote: entry.quote,
     delivery: entry.status,
     error: entry.error,
   };

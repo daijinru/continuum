@@ -1,3 +1,4 @@
+import { messageQuote, type ReplyQuote } from "./reply-quote.ts";
 import { messageKey } from "./chat-row-state.ts";
 import type { VirtuosoHandle } from "react-virtuoso";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
@@ -180,10 +181,15 @@ export function Conversation({ focus }: { focus?: string }) {
     if (!quick && !text.trim()) return;
     jumpToSent.current = true;
     setError("");
+    let quote: ReplyQuote | undefined;
+    if (!quick && reply) quote = messageQuote(reply);
+    else if (!quick && focus) {
+      quote = { type: "goal", id: focus, text: target?.id === focus ? target.title : "这项委托" };
+    }
     queueMessage({
       key: quick ? crypto.randomUUID() : draftKey.current, text: quick ? "现在都怎么样了？" : text.trim(),
-      ...(!quick && (reply ? { replyTo: reply.id } : focus ? { focus } : {})),
-    });
+      ...(quote?.type === "message" ? { replyTo: quote.id } : quote ? { focus: quote.id } : {}),
+    }, quote);
     if (!quick) {
       setText("");
       conversationStorage().removeItem("main-draft");

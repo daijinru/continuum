@@ -1,4 +1,4 @@
-import React, { memo, useLayoutEffect, useRef, type RefObject } from "react";
+import React, { memo, useEffect, useState, useLayoutEffect, useRef, type RefObject } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   ArrowUpRight,
@@ -11,6 +11,7 @@ import { api, Form, field, type Data } from "./lib.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { ProjectFolder } from "./ProjectFolder.tsx";
 import { ChatApprovals } from "./ChatApprovals.tsx";
+import { sender, messageTime, type ReplyQuote } from "./reply-quote.ts";
 import { retryMessage } from "./conversation-outbox.ts";
 import { ChatRowState, useRowState, messageKey } from "./chat-row-state.ts";
 
@@ -104,6 +105,24 @@ export default memo(function ChatHistory({
     frame = requestAnimationFrame(settle);
     return () => cancelAnimationFrame(frame);
   }, [firstIndex, more]);
+  const [jump, setJump] = useState<string | null>(null);
+  const [position, setPosition] = useState({ revision: 0, index: "LAST" as "LAST" | number });
+  const focusOnMount = useRef<string | null>(null);
+  useEffect(() => {
+    if (!jump || !loaded) return;
+    const index = rows.findIndex(row => row.id === jump);
+    if (index < 0 && more) {
+      earlier();
+      return;
+    }
+    if (index >= 0) {
+      // Prepending history preserves the old viewport. Start the virtual list
+      // at the selected row once all pages up to it have arrived.
+      focusOnMount.current = jump;
+      setPosition(old => ({ revision: old.revision + 1, index }));
+    }
+    setJump(null);
+  }, [jump, rows, more, earlier, loaded]);
   if (!rows.length)
     return (
       <div className="chat-stream">
@@ -119,6 +138,7 @@ export default memo(function ChatHistory({
     );
   return (
     <Virtuoso
+      key={position.revision}
       ref={list}
       className="chat-stream"
       scrollerRef={(el) => {
@@ -130,7 +150,7 @@ export default memo(function ChatHistory({
       onKeyDown={clearAnchor}
       data={rows}
       firstItemIndex={firstIndex}
-      initialTopMostItemIndex={{ index: "LAST", align: "end" }}
+      initialTopMostItemIndex={{ index: position.index, align: position.index === "LAST" ? "end" : "center" }}
       followOutput
       atBottomThreshold={65}
       defaultItemHeight={108}
@@ -150,6 +170,22 @@ export default memo(function ChatHistory({
           <div
             className={"chat-column chat-row" + (divided ? " divided" : "")}
             data-message-id={m.id}
+            tabIndex={-1}
+            ref={focusOnMount.current === m.id ? el => {
+              if (!el) return;
+              // Virtuoso briefly hides rows while measuring the new viewport.
+              let frame: number;
+              const focus = () => {
+                if (getComputedStyle(el).visibility === "hidden") {
+                  frame = requestAnimationFrame(focus);
+                  return;
+                }
+                el.focus({ preventScroll: true });
+                focusOnMount.current = null;
+              };
+              frame = requestAnimationFrame(focus);
+              return () => cancelAnimationFrame(frame);
+            } : undefined}
           >
             <ChatRowState.Provider
               value={{ values: memory.current, id: messageKey(m) }}
@@ -157,6 +193,7 @@ export default memo(function ChatHistory({
               <Message
                 m={m}
                 newDay={newDay}
+                jump={setJump}
                 settings={settings}
                 replyTo={replyTo}
                 resolved={resolved}
@@ -192,10 +229,11 @@ function LongMessage({ text }: { text: string }) {
 function Message({
   m,
   newDay,
+  jump,
   settings,
   replyTo,
   resolved,
-}: Actions & { m: Data; newDay: boolean }) {
+}: Actions & { m: Data; newDay: boolean; jump: (id: string) => void }) {
   return (
     <>
       {newDay && (
@@ -214,22 +252,8 @@ function Message({
       ) : (
         <article className={"chat-message " + m.role}>
           <div className="meta">
-            <b>
-              {m.role === "user"
-                ? "你"
-                : m.kind === "reminder"
-                  ? "提醒"
-                  : m.kind === "history"
-                    ? "以往交付"
-                    : "Continuum"}
-            </b>
-            <time dateTime={m.created}>
-              {new Date(m.created).toLocaleTimeString("zh-CN", {
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-              })}
-            </time>
+            <b>{sender(m.role, m.kind)}</b>
+            <time dateTime={m.created}>{messageTime(m.created)}</time>
             {m.delivery && (
               <span role="status">
                 {
@@ -243,6 +267,7 @@ function Message({
               </span>
             )}
           </div>
+          {m.quote && <Quote quote={m.quote} jump={jump} />}
           {m.body.length > 800 ? (
             <LongMessage text={m.body} />
           ) : (
@@ -287,6 +312,18 @@ function Message({
       )}
     </>
   );
+}
+
+function Quote({ quote, jump }: { quote: ReplyQuote; jump: (id: string) => void }) {
+  const label = quote.type === "goal" ? "回复委托"
+    : `回复 ${sender(quote.role, quote.kind)} · ${messageTime(quote.created)}`;
+  const content = <><strong>{label}</strong><span>{quote.text}</span></>;
+  if (quote.type === "goal")
+    return <a className="reply-quote" href={"#goal/" + quote.id}>{content}</a>;
+  // Approval notices may have been folded into a newer row for the same goal.
+  if (quote.origin?.startsWith("inbox:"))
+    return <a className="reply-quote" href={"#inbox/" + quote.origin.slice(6)}>{content}</a>;
+  return <button className="reply-quote" onClick={() => jump(quote.id)}>{content}</button>;
 }
 
 function MessageLinks({

@@ -112,6 +112,12 @@ test("一个主对话：复合承诺、幂等提交、静默、单项回复、�
     recovered.tick(after(next));
     await recovered.stop();
     const messages = timeline(current.db);
+    const savedReply = messages.find(m => m.role === "user" && m.reply_to === report.id)!;
+    assert.deepEqual(savedReply.quote, {
+      type: "message", id: report.id, text: report.body.slice(0, 240),
+      kind: report.kind, role: report.role, origin: report.origin, created: report.created,
+    });
+    assert.equal(messages.find(m => m.id === input.key)!.quote, null);
     assert.equal(messages.filter((m) => m.kind === "reminder").length, 1);
     assert.equal(messages.filter((m) => m.kind === "result").length, 2);
     assert.equal(current.db.all("SELECT * FROM main_observations").length, 3);
@@ -152,7 +158,14 @@ test("来源失败不是没有变化；持续失败只提示一次，进度查�
     }
     assert.equal(timeline(db).filter((m) => m.kind === "problem").length, 1);
     assert.equal(db.all("select * from main_observations").length, 0);
-    await conv.send({ key: key(), text: "怎么样了？", focus: g.id });
+    const focused = { key: key(), text: "怎么样了？", focus: g.id };
+    await conv.send(focused);
+    const snapshot = await api.app.inject("/api/v1/conversation");
+    const quote = snapshot.json().data.find((m: { id: string }) => m.id === focused.key).quote;
+    assert.deepEqual(quote, { type: "goal", id: g.id, text: s.goal(g.id).title });
+    db.run("UPDATE goals SET title=? WHERE id=?", "工具周报", g.id);
+    const changes = await api.app.inject("/api/v1/conversation/changes?since=" + snapshot.headers["x-conversation-version"]);
+    assert.equal(changes.json().data.rows.find((m: { id: string }) => m.id === focused.key).quote.text, "工具周报");
     assert.match(timeline(db).at(-1)!.body, /没有|尚无成功读取/);
     assert.equal(db.all("select * from agent_runs").length, 0);
   } finally {

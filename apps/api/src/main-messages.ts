@@ -9,9 +9,10 @@ export function post(
   origin: string,
   reply: string | null = null,
   id: string = uid(),
+  replyGoal: string | null = null,
 ) {
   const created = db.run(
-    "INSERT INTO main_messages(id,role,kind,body,reply_to,origin,created) VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin) DO NOTHING",
+    "INSERT INTO main_messages(id,role,kind,body,reply_to,origin,created,reply_goal) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(origin) DO NOTHING",
     id,
     role,
     kind,
@@ -19,6 +20,7 @@ export function post(
     reply,
     origin,
     now(),
+    replyGoal,
   );
   if (!created.changes)
     return db.must("SELECT id FROM main_messages WHERE origin=?", origin)
