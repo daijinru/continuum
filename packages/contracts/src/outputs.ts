@@ -1,5 +1,5 @@
 import { z, type ZodTypeAny } from "zod";
-import { monitor } from "./monitor.ts";
+import { monitor, workStatus } from "./monitor.ts";
 const id = z.string().uuid(),
   str = z.string(),
   row = (shape: Record<string, ZodTypeAny>) => z.object(shape).passthrough();
@@ -134,6 +134,7 @@ export const outputs: Record<string, ZodTypeAny> = {
     connections: z.array(connection),
   }),
   "GET /system/monitor": monitor,
+  "GET /conversation/work-status": workStatus,
   "GET /agent-connections": z.array(connection),
   "POST /agent-connections/check": row({
     installed: z.boolean(),

@@ -13,7 +13,7 @@ import {
   Menu,
 } from "lucide-react";
 import { AppCtx } from "./lib.tsx";
-import { Monitor } from "./Monitor.tsx";
+import { Monitor, WorkStatusLink } from "./Monitor.tsx";
 import { DevUpdateNotice } from "./DevUpdateNotice.tsx";
 import { Today } from "./Feed.tsx";
 import { Conversation } from "./Conversation.tsx";
@@ -207,9 +207,12 @@ function App() {
             </div>
             <div>
               {page === "chat" && (
-                <a className="toolbar-link" href="#today">
-                  <PanelTop size={15} /> 今日简报
-                </a>
+                <>
+                  <WorkStatusLink />
+                  <a className="toolbar-link" href="#today" aria-label="今日简报" title="今日简报">
+                    <PanelTop size={15} /> <span className="brief-label">今日简报</span>
+                  </a>
+                </>
               )}
               <button
                 aria-label="切换明暗主题"
