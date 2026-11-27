@@ -163,12 +163,13 @@ export class MainAgenda {
               return;
             }
             db.run(
-              "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status) VALUES(?,?,'goal',?,?,?,'queued')",
+              "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status,workload) VALUES(?,?,'goal',?,?,?,'queued',?)",
               uid(),
               t.goal_id,
               t.goal_id,
               t.description,
               now(),
+              t.workload ?? null,
             );
           }
           db.run(

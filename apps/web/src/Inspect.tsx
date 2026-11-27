@@ -25,6 +25,7 @@ import {
   type Data,
 } from "./lib.tsx";
 import { Limits } from "./Goals.tsx";
+import { ModelRouting, Selection } from "./ModelRouting.tsx";
 import { TokenUsage } from "./TokenUsage.tsx";
 import { RestartService } from "./RestartService.tsx";
 import { ConversationLogViewer } from "./ConversationLogViewer.tsx";
@@ -524,6 +525,7 @@ export function Run({ id }: { id: string }) {
         <div className="meta">
           线程 {r.thread_id || "尚未分配"} · 轮次 {r.turn_id || "尚未分配"}
         </div>
+        {r.selection && <p>本轮选用 <Selection choice={r.selection} /></p>}
         {r.status === "unknown" && (
           <Action run={() => api("/runs/" + id + "/reconcile", {})}>
             核对提供方状态
@@ -555,6 +557,7 @@ export function Settings() {
         <TokenUsage label="主对话 · 理解消息" usage={d.usage.conversation} />
         <TokenUsage label="全部委托 · 执行与筛选" usage={d.usage.goals} />
         <p className="muted">仅统计 Codex 已报告的用量；无记录不代表零消耗。到点提醒和快捷进度查询不调用模型。</p>
+        <ModelRouting />
       </section>
       <section className="panel pad">
         <h2>

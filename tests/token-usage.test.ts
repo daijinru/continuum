@@ -15,18 +15,31 @@ test("临时研判、热榜和续跑分别归属；重复快照、快捷查询�
     `#!${process.execPath}
 const fs = require("node:fs");
 const send = p => console.log(JSON.stringify(p));
+const model = (id, description, isDefault = false) => ({model:id,displayName:id,description,isDefault,
+  hidden:false,inputModalities:["text"],supportedReasoningEfforts:["low","medium","high"].map(reasoningEffort=>({reasoningEffort}))});
 if (process.argv.includes("exec")) {
-  if (!process.argv.includes("--json")) process.exit(1);
+  if (!process.argv.includes("--json") || process.argv[process.argv.indexOf("--model")+1] !== "economy" ||
+      !process.argv.includes('model_reasoning_effort="low"')) process.exit(1);
   const route = !!JSON.parse(fs.readFileSync("schema.json")).properties.actions;
   fs.writeFileSync("answer.json", JSON.stringify(route ? {actions:[{type:"trending",target:"",text:"热榜",at:"",cadence:"daily",notify:"changes"}]} : {items:[]}));
   send({type:"turn.completed",usage:{input_tokens:20,output_tokens:3,cached_input_tokens:8,reasoning_output_tokens:1}});
 } else {
   let resumed = false;
   require("node:readline").createInterface({input:process.stdin}).on("line", line => {
-    const {method,id} = JSON.parse(line);
+    const {method,id,params} = JSON.parse(line);
     if (id === undefined) return;
+    if (method === "model/list") {
+      return send({id,result:params.cursor ? {data:[model("expert","Our most capable model for complex coding")],nextCursor:null}
+        : {data:[{...model("hidden","Fast affordable model"), hidden:true},model("regular","General purpose",true),model("economy","Fast and affordable")],nextCursor:"page2"}});
+    }
     if (method === "thread/resume") resumed = true;
     if (method === "turn/start") {
+      if (!resumed && (params.model !== "regular" || params.effort !== "medium")) return send({id,error:{message:"wrong regular selection"}});
+      if (resumed && params.model === "expert" && params.effort === "high") {
+        if (params.input[0].text.includes("模拟断线")) process.exit(0);
+        return send({id,error:{message:"model is not available"}});
+      }
+      if (resumed && (params.model || params.effort)) return send({id,error:{message:"wrong fallback"}});
       const turn = {id:resumed?"two":"one",status:"completed"};
       send({method:"turn/started",params:{threadId:"thread",turn}});
       for (const [threadId,turnId,n] of [["thread",turn.id,resumed?50:30],["thread",turn.id,resumed?50:30],["thread","stale",500],["other",turn.id,500],["thread",turn.id,10]]) {
@@ -34,7 +47,7 @@ if (process.argv.includes("exec")) {
       }
       send({id,result:{turn}});
       send({method:"turn/completed",params:{threadId:"thread",turn}});
-    } else send({id,result:{account:{},thread:{id:"thread"}}});
+    } else send({id,result:{account:{},model:"regular",reasoningEffort:"low",thread:{id:"thread"}}});
   });
 }`,
     { mode: 0o700 },
@@ -67,13 +80,48 @@ if (process.argv.includes("exec")) {
       const r = await api.s.start(
         work.id,
         crypto.randomUUID(),
-        undefined,
+        resumed ? "排查偶发故障" : undefined,
         resumed,
       );
       // turn/completed may arrive in a different pipe read than turn/start.
       await assertEventually(() => api.s.run(r.id).status === "succeeded");
       assert.equal((await goal(work.id)).total, resumed ? 50 : 30);
     }
+    const directory = (await api.app.inject("/api/v1/models")).json().data;
+    assert.deepEqual(directory.choices, {
+      light: { model: "economy", effort: "low" },
+      standard: { model: "regular", effort: "medium" },
+      deep: { model: "expert", effort: "high" },
+    });
+    assert.equal(directory.models.length, 3);
+    assert.deepEqual(
+      directory.recent.map((c: Record<string, unknown>) => [
+        c.kind,
+        c.workload,
+        c.model,
+        c.fallback,
+        c.total,
+      ]),
+      [
+        ["委托执行", "deep", "regular", 1, 20],
+        ["委托执行", "standard", "regular", 0, 30],
+        ["筛选", "light", "economy", 0, 23],
+        ["理解消息", "light", "economy", 0, 23],
+      ],
+    );
+    assert.ok(
+      directory.recent.every(
+        (c: Record<string, unknown>) => c.finished && c.outcome === "succeeded",
+      ),
+    );
+    await assert.rejects(
+      api.s.start(work.id, crypto.randomUUID(), "排查模拟断线", true),
+    );
+    assert.equal(
+      api.db.must("SELECT status FROM agent_runs ORDER BY rowid DESC LIMIT 1")
+        .status,
+      "unknown",
+    );
     await api.app.close();
     api = await createServer({ home, seed: false, worker: false });
     const usage = await settings();

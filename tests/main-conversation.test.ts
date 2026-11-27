@@ -363,3 +363,22 @@ test("断线后的消息按变化顺序补齐，多批回放和事务回滚均�
   const result = await app.inject("/api/v1/conversation/changes?since=" + version);
   assert.deepEqual(result.json().data, { rows: [], version, more: false });
 });
+
+test("每项工作单独保存难度，排期沿用原判断，重新交代只改变这一轮", async (t) => {
+  const api = await createServer({ home: fixture(), worker: false, seed: false });
+  t.after(() => api.app.close());
+  const { s, db, agenda } = api;
+  const conversation = new MainConversation(s, async () => [
+    intent("work", "整理已有材料", { workload: "light" }),
+    intent("work", "核对两个系统的数据", { at: "2099-03-20T09:00", workload: "deep" }),
+  ]);
+  await conversation.send({ key: key(), text: "整理材料，另外预约数据核对" });
+  const scheduled = db.must("SELECT * FROM main_tasks WHERE next_at IS NOT NULL");
+  agenda.tick(after(scheduled.next_at));
+  await agenda.stop();
+  assert.equal(db.must("SELECT workload FROM user_messages WHERE goal_id=?", scheduled.goal_id).workload, "deep");
+  const first = db.must("SELECT * FROM user_messages WHERE workload='light'");
+  conversation.route = async () => [intent("rerun", "对照多个版本找出差异原因", { workload: "deep", target: first.goal_id })];
+  await conversation.send({ key: key(), text: "再核对一次差异原因" });
+  assert.deepEqual(db.all("SELECT workload FROM user_messages WHERE goal_id=? ORDER BY rowid", first.goal_id).map(m => m.workload), ["light", "deep"]);
+});

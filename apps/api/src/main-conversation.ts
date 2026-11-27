@@ -286,15 +286,18 @@ export class MainConversation {
     const { db } = this.s;
     const { next, clock } = when(a, instant),
       immediate = a.type === "work" && !a.at;
-    const g = this.s.createCommission(a.text, uid(), project?.id, immediate);
+    const key = uid();
+    const g = this.s.createCommission(a.text, key, project?.id, immediate);
+    if (immediate && a.workload) db.run("UPDATE user_messages SET workload=? WHERE id=?", a.workload, key);
     db.run(
-      "INSERT INTO main_tasks(goal_id,mode,cadence,clock,next_at,notify) VALUES(?,?,?,?,?,?)",
+      "INSERT INTO main_tasks(goal_id,mode,cadence,clock,next_at,notify,workload) VALUES(?,?,?,?,?,?,?)",
       g.id,
       a.type,
       a.cadence,
       clock,
       a.type === "trending" && !a.at ? instant.toISOString() : next,
       a.notify,
+      a.workload ?? null,
     );
     const answer = `已接下「${g.title}」。${project ? `将在「${project.name}」中工作。` : ""}${a.type === "trending" ? (a.notify === "changes" ? "只在有符合要求的新项目时告诉你。" : "按约定给你一份热榜结果。") : immediate ? "已排队执行。" : ""}${next ? `下次${a.type === "reminder" ? "提醒" : "执行"}：${stamp(next)}${a.cadence === "weekdays" ? "（工作日）" : a.cadence === "daily" ? "（每天）" : ""}。` : ""}`;
     return { goal: g.id as string, answer };
@@ -870,12 +873,13 @@ export class MainConversation {
             );
           else
             db.run(
-              "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status) VALUES(?,?,'goal',?,?,?,'queued')",
+              "INSERT INTO user_messages(id,goal_id,scope,ref,content,created,status,workload) VALUES(?,?,'goal',?,?,?,'queued',?)",
               uid(),
               g.id,
               g.id,
               redact(a.text || text),
               now(),
+              a.workload ?? null,
             );
           answers.push(`已安排重新执行「${g.title}」。`);
         }

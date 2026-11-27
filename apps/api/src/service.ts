@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DirectoryUnavailable, Store, now, uid, Problem, type Row } from "./db.ts";
 import { holdDirectory, pendingDirectory } from "./directory-recovery.ts";
 import { followupInstruction } from "./followups.ts";
-import { recordUsage } from "./usage.ts";
+import { recordChoice, recordUsage } from "./usage.ts";
 import { deliverUpdate, reportRun, post } from "./main-conversation.ts";
 import {
   type AgentAdapter,
@@ -30,6 +30,13 @@ import {
   decisionInput,
   type GoalInput,
 } from "../../../packages/contracts/src/index.ts";
+
+// Direct API calls and older queued messages may have no interpreter assessment.
+function classifyWork(request: string) {
+  if (/排查|根因|跨模块|架构|迁移|并发|诊断|root cause|diagnos|debug|architect|migration|race condition/i.test(request)) return "deep";
+  if (/^(?:请|帮我|please )?(?:摘要|总结|翻译|提取|归类|summari[sz]e|translate|extract)/i.test(request.trim())) return "light";
+  return "standard";
+}
 
 const open = "('pending','deferred')";
 type ApprovalGrant = { source: string; actor: "goal_grant" | "run_grant" };
@@ -144,6 +151,9 @@ export class Service {
   context(run: Row): Context {
     const goal = this.goal(run.goal_id);
     const workspace = this.db.allowed(goal.workspace_id);
+    const baseline = run.thread_id
+      ? this.db.one("SELECT total FROM token_usage WHERE source=?", "thread:" + run.thread_id)?.total
+      : 0;
     return {
       id: run.id,
       workspace,
@@ -156,7 +166,12 @@ export class Service {
       thread: run.thread_id,
       turn: run.turn_id,
       threadUsage: (thread, counts) => {
-        if (!this.closed) recordUsage(this.db, "thread:" + thread, goal.id, counts);
+        if (!this.closed) this.db.tx(() => {
+          recordUsage(this.db, "thread:" + thread, goal.id, counts);
+          if (baseline != null) this.db.run(
+            "UPDATE model_calls SET total=(SELECT total-? FROM token_usage WHERE source=? AND total>=?) WHERE source=?",
+            baseline, "thread:" + thread, baseline, run.id);
+        });
       },
       reference: (thread, turn) => {
         if (!this.closed)
@@ -239,7 +254,7 @@ export class Service {
       origin === "schedule"
         ? undefined
         : db.one(
-            "SELECT goal_id,content,source_run FROM user_messages WHERE id=?",
+            "SELECT goal_id,content,source_run,workload FROM user_messages WHERE id=?",
             key,
           );
     const request = instruction || "执行目标并报告证据";
@@ -302,10 +317,19 @@ export class Service {
       throw e;
     }
     try {
+      if (goal.provider === "codex") {
+        const continuing = previous && (message?.source_run || !instruction || /^(继续|接着做|continue)[。.!！]?$/i.test(request.trim()));
+        const inherited = continuing ? db.one("SELECT workload FROM model_calls WHERE source=?", previous.id)?.workload : null;
+        const workload = message?.workload ?? inherited ?? classifyWork(instruction || goal.description);
+        context.workload = workload;
+        context.selection = choice => {
+          if (!this.closed) recordChoice(db, run.id, "委托执行", workload, choice);
+        };
+      }
       await this.adapters[goal.provider].start(context);
     } catch (e) {
       const current = this.run(run.id);
-      this.event(run.id, {
+      if (!current.finished) this.event(run.id, {
         key: "start-error",
         type: current.thread_id ? "system.disconnected" : "run.failed",
         title: redact((e as Error).message),
@@ -823,6 +847,7 @@ export class Service {
   }
   async recover() {
     const db = this.db;
+    db.run("UPDATE model_calls SET outcome='unknown' WHERE source LIKE 'exec:%' AND outcome='running'");
     db.run(
       "DELETE FROM goal_approval_grants WHERE source NOT IN (SELECT source FROM active_goal_approval_grants)",
     );
