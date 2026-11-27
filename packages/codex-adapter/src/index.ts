@@ -443,14 +443,17 @@ export class CodexAdapter implements AgentAdapter {
       return;
     }
     if (item.type === "agentMessage") {
-      const question = item.phase === "commentary" ? undefined :
-        item.questions?.map(q => q.title).join("；") ||
-        /(?:^|\n)待补充[：:]\s*([^\n]+)$/.exec(item.text.trim())?.[1];
+      const question = item.questions?.map(q =>
+        q.options?.length ? q.title + "（" + q.options.join(" / ") + "）" : q.title
+      ).join("\n") || (item.phase !== "commentary" && /(?:^|\n)待补充[：:]\s*([^\n]+)$/.exec(item.text.trim())?.[1]);
       c.emit({
         key,
         type: "agent.message",
         title: redact(item.text) || question || "Codex 消息",
-        data: question ? { followup: redact(question) } : undefined,
+        data: {
+          ...(item.delivery === "async" ? { delivery: "async" } : {}),
+          ...(question ? { followup: redact(question) } : {}),
+        },
         method,
       });
     }

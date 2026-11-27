@@ -6,19 +6,36 @@ export function followupFor(db: Store, message: Row) {
     "SELECT * FROM followup_questions WHERE message_id=?",
     message.id,
   );
-  // Older results can contain an unmarked request for information. Only the
-  // reasoner can tell whether this particular reply answers such a request.
+  // Live questions are tied to the exact provider event. Older unmarked
+  // questions can still be answered by replying to the terminal result.
+  const live =
+    message.origin?.startsWith("event:") && message.kind === "question"
+      ? db.one(
+          "SELECT run_id,json_extract(payload,'$.followup') question FROM raw_events WHERE id=?",
+          message.id,
+        )
+      : undefined;
   if (
     !saved &&
+    !live &&
     (!["result", "history"].includes(message.kind) ||
       !message.origin?.startsWith("run:"))
   )
     return;
   const run = db.one(
-    "SELECT id,goal_id FROM agent_runs WHERE id=? AND status='succeeded'",
-    saved?.run_id ?? message.origin.slice(4),
+    "SELECT id,goal_id,status FROM agent_runs WHERE id=?",
+    saved?.run_id ?? live?.run_id ?? message.origin.slice(4),
   );
-  if (!run) return;
+  if (
+    !run ||
+    (run.status !== "succeeded" &&
+      !(
+        (live || saved) &&
+        ["starting", "running", "waiting_approval"].includes(run.status)
+      ))
+  )
+    return;
+
   const pending =
     saved?.answer_id &&
     db.one(
@@ -29,11 +46,15 @@ export function followupFor(db: Store, message: Row) {
     run: String(run.id),
     goal: String(run.goal_id),
     message: String(pending?.message_id ?? message.id),
-    question: String(pending?.question ?? saved?.question ?? message.body),
-    original: db.must(
-      "SELECT body FROM main_messages WHERE origin=?",
-      "run:" + run.id,
-    ).body as string,
+    question: String(
+      pending?.question ?? saved?.question ?? live?.question ?? message.body,
+    ),
+    original: live
+      ? message.body
+      : (db.one(
+          "SELECT body FROM main_messages WHERE origin=?",
+          "run:" + run.id,
+        )?.body ?? message.body),
     answers: answersFor(db, run.id),
   };
 }
@@ -90,7 +111,7 @@ export function answerFollowup(
   missing?: string,
 ) {
   const latest = db.one(
-    "SELECT id FROM agent_runs WHERE goal_id=? ORDER BY created DESC,rowid DESC LIMIT 1",
+    "SELECT id,status FROM agent_runs WHERE goal_id=? ORDER BY created DESC,rowid DESC LIMIT 1",
     target.goal,
   );
   const open = db.one(
@@ -105,7 +126,20 @@ export function answerFollowup(
     "SELECT id FROM user_messages WHERE goal_id=? AND status IN ('queued','dispatching')",
     target.goal,
   );
-  if (!canContinue || queued || latest?.id !== target.run || open?.answer_id)
+  const waiting = db.one(
+    "SELECT message_id FROM followup_questions WHERE run_id=? AND answer_id IS NULL",
+    target.run,
+  );
+  if (
+    (waiting && waiting.message_id !== target.message) ||
+    !canContinue ||
+    queued ||
+    latest?.id !== target.run ||
+    !["running", "starting", "waiting_approval", "succeeded"].includes(
+      latest.status,
+    ) ||
+    open?.answer_id
+  )
     return false;
   db.run(
     `INSERT INTO followup_questions(message_id,run_id,question,answer_id) VALUES(?,?,?,?)
