@@ -13,7 +13,7 @@ import { Worker } from "../../worker/src/index.ts";
 import { conversationRunProgress, conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
 import { MainAgenda } from "./main-agenda.ts";
-import { goalUsage, workspaceUsage } from "./usage.ts";
+import { goalUsage, workspaceUsage, recentCalls } from "./usage.ts";
 import {
   goalInput,
   startInput,
@@ -32,6 +32,7 @@ import {
   unpack,
   reports,
 } from "../../../packages/briefing/src/index.ts";
+import { modelCatalog, selectModel } from "../../../packages/codex-adapter/src/models.ts";
 import { checkCodex } from "../../../packages/codex-adapter/src/index.ts";
 export async function createServer(
   options: {
@@ -234,6 +235,14 @@ export async function createServer(
     );
     return check;
   });
+  get("/models", async () => {
+    const models = await modelCatalog();
+    return {
+      models: models.map(m => ({ id: m.model, name: m.displayName || m.model, efforts: m.supportedReasoningEfforts.map(e => e.reasoningEffort) })),
+      choices: Object.fromEntries((["light", "standard", "deep"] as const).map(t => [t, selectModel(models, t)])),
+      recent: recentCalls(db),
+    };
+  });
   get("/settings", () => ({
     ...s.config(),
     service: { instance, canRestart: !!options.restart, canChooseFolder: process.platform === "darwin" },
@@ -434,7 +443,10 @@ export async function createServer(
       offset(q),
     ),
   );
-  get("/runs/:id", ({ id }) => s.run(id));
+  get("/runs/:id", ({ id }) => ({
+    ...s.run(id),
+    selection: db.one("SELECT workload,model,effort,fallback,total FROM model_calls WHERE source=?", id) ?? null,
+  }));
   get("/runs/:id/events", ({ id, q }) =>
     db.all(
       "SELECT * FROM raw_events WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?",

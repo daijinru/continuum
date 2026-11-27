@@ -56,7 +56,11 @@ export type Sink = (event: Observation) => void;
 // The provider still has a live request that can be declined.
 export class ApprovalScopeChanged extends Error {}
 export type TokenCounts = { input: number; output: number; total: number };
+export type Workload = "light" | "standard" | "deep";
+export type ModelSelection = { model?: string; effort?: string; fallback?: boolean };
 export type Context = {
+  workload?: Workload;
+  selection?: (choice: ModelSelection) => void;
   id: string;
   workspace: string;
   managedCommission?: boolean;

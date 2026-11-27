@@ -149,6 +149,12 @@ export const outputs: Record<string, ZodTypeAny> = {
     version: str,
     detail: str,
   }),
+  "GET /models": z.object({
+    models: z.array(z.object({ id: str, name: str, efforts: z.array(str) })),
+    choices: z.record(z.object({ model: str.optional(), effort: str.optional() })),
+    recent: z.array(z.object({ kind: str, workload: str, model: str.nullable(), effort: str.nullable(),
+      fallback: z.number(), started: str, finished: str.nullable(), total: z.number().nullable(), outcome: str })),
+  }),
   "GET /settings": cfg.extend({
     usage: z.object({ conversation: usage, goals: usage, all: usage }),
     service: z.object({ instance: id, canRestart: z.boolean(), canChooseFolder: z.boolean() }),
@@ -172,7 +178,9 @@ export const outputs: Record<string, ZodTypeAny> = {
   "POST /goals/:id/interrupt": run,
   "POST /runs/:id/reconcile": run,
   "GET /goals/:id/runs": z.array(run),
-  "GET /runs/:id": run,
+  "GET /runs/:id": run.extend({ selection: z.object({
+    workload: str, model: str.nullable(), effort: str.nullable(), fallback: z.number(), total: z.number().nullable(),
+  }).nullable() }),
   "GET /runs/:id/events": z.array(event),
   "GET /runs/:id/artifacts": z.array(file),
   "GET /stories": z.array(story),

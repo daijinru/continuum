@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { realpathSync, lstatSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname } from "node:path";
-import { Rpc, type Packet } from "./rpc.ts";
+import { expireCatalog, modelCatalog, modelRejected, selectModel } from "./models.ts";
+import type { ModelSelection } from "../../agent-core/src/index.ts";
+import { Rpc, RpcRejection, type Packet } from "./rpc.ts";
 import { codexEnvironment } from "./cli.ts";
 import {
   redact,
@@ -144,7 +146,12 @@ export class CodexAdapter implements AgentAdapter {
       if (c.managedCommission)
         instruction.push("在委托目录内自行完成日常步骤，不请求提权，不绕过沙箱。若资料不可得，直接说明未完成的部分和需要用户提供的资料，不要让用户确认命令。仅当用户需要决定业务取舍时提出具体问题。");
       instruction.push("若本轮因缺少用户资料而停止，在最终回复末尾另起一行写「待补充：」和要用户回答的一个具体问题。可选建议不使用这一行。");
-      const started = await rpc.call("turn/start", {
+      const tier = c.workload ?? "standard";
+      const choice = selectModel(await modelCatalog(result.modelProvider, c.workspace, rpc), tier);
+      const defaults: ModelSelection = { model: result.model, effort: result.reasoningEffort ?? undefined, fallback: true };
+      const startTurn = (override: ModelSelection) => rpc.call("turn/start", {
+        model: override.model,
+        effort: override.effort,
         threadId: result.thread.id,
         input: [{ type: "text", text: instruction.join("\n\n"), text_elements: [] }],
         approvalPolicy: policy.approvalPolicy,
@@ -157,6 +164,17 @@ export class CodexAdapter implements AgentAdapter {
           excludeSlashTmp: true,
         },
       });
+      c.selection?.(choice.model ? choice : defaults);
+      let started;
+      try {
+        started = await startTurn(choice);
+      } catch (e) {
+        // A lost reply may hide an accepted turn. Never replay it.
+        if (!choice.model || !(e instanceof RpcRejection) || !modelRejected(e.message) || s.turn || s.ended) throw e;
+        expireCatalog(result.modelProvider, c.workspace);
+        c.selection?.(defaults);
+        started = await startTurn({});
+      }
       if (!s.ended) {
         s.turn = started.turn.id;
         c.reference(result.thread.id, started.turn.id);
@@ -168,6 +186,10 @@ export class CodexAdapter implements AgentAdapter {
         });
       }
     } catch (e) {
+      if (!s.turn && !s.ended && e instanceof RpcRejection) {
+        s.ended = true;
+        c.emit({ key: "rejected", type: "run.failed", title: redact(e.message) });
+      }
       if (!s.thread) s.ended = true;
       rpc.close();
       throw e;

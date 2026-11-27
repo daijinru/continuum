@@ -11,6 +11,7 @@ export type Packet = {
   result?: any;
   error?: { message: string; code?: number };
 };
+export class RpcRejection extends Error {}
 export class Rpc {
   proc: ChildProcessWithoutNullStreams;
   pending = new Map<
@@ -64,7 +65,7 @@ export class Rpc {
         if (!p) return;
         this.pending.delete(packet.id as number);
         clearTimeout(p.timer);
-        if (packet.error) p.fail(Error(redact(packet.error.message)));
+        if (packet.error) p.fail(new RpcRejection(redact(packet.error.message)));
         else p.done(packet.result);
       } catch {
         this.close();
@@ -82,14 +83,15 @@ export class Rpc {
   async call<M extends ClientRequest["method"]>(
     method: M,
     params: Extract<ClientRequest, { method: M }>["params"],
+    timeout = 30000,
   ): Promise<any> {
     const id = ++this.sequence;
     return new Promise((done, fail) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         fail(Error("Codex 请求超时"));
-        this.close();
-      }, 30000);
+        if (method !== "model/list") this.close();
+      }, timeout);
       this.pending.set(id, { done, fail, timer });
       this.send({ id, method, params }).catch((e) => {
         clearTimeout(timer);
