@@ -17,10 +17,11 @@ export async function api(
   const res = await fetch("/api/v1" + path, {
     method,
     headers:
+      body instanceof Blob ? { "Content-Type": body.type, "X-Continuum-Token": token } :
       body === undefined
         ? {}
         : { "Content-Type": "application/json", "X-Continuum-Token": token },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body instanceof Blob ? body : body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await res.json();
   if (res.status === 403 && method !== "GET") token = "";

@@ -147,13 +147,17 @@ export class CodexAdapter implements AgentAdapter {
         instruction.push("在委托目录内自行完成日常步骤，不请求提权，不绕过沙箱。若资料不可得，直接说明未完成的部分和需要用户提供的资料，不要让用户确认命令。仅当用户需要决定业务取舍时提出具体问题。");
       instruction.push("若本轮因缺少用户资料而停止，在最终回复末尾另起一行写「待补充：」和要用户回答的一个具体问题。可选建议不使用这一行。");
       const tier = c.workload ?? "standard";
-      const choice = selectModel(await modelCatalog(result.modelProvider, c.workspace, rpc), tier);
+      const catalog = await modelCatalog(result.modelProvider, c.workspace, rpc);
+      const models = c.imageUrls?.length ? catalog.filter(model => model.inputModalities.includes("image")) : catalog;
+      if (catalog.length && !models.length) throw new RpcRejection("当前模型不支持图片分析");
+      const choice = selectModel(models, tier);
       const defaults: ModelSelection = { model: result.model, effort: result.reasoningEffort ?? undefined, fallback: true };
       const startTurn = (override: ModelSelection) => rpc.call("turn/start", {
         model: override.model,
         effort: override.effort,
         threadId: result.thread.id,
-        input: [{ type: "text", text: instruction.join("\n\n"), text_elements: [] }],
+        input: [{ type: "text", text: instruction.join("\n\n"), text_elements: [] },
+          ...(c.imageUrls ?? []).map(url => ({ type: "image" as const, url }))],
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: "user",
         sandboxPolicy: {
@@ -170,7 +174,7 @@ export class CodexAdapter implements AgentAdapter {
         started = await startTurn(choice);
       } catch (e) {
         // A lost reply may hide an accepted turn. Never replay it.
-        if (!choice.model || !(e instanceof RpcRejection) || !modelRejected(e.message) || s.turn || s.ended) throw e;
+        if ((c.imageUrls?.length && !models.some(model => model.model === result.model)) || !choice.model || !(e instanceof RpcRejection) || !modelRejected(e.message) || s.turn || s.ended) throw e;
         expireCatalog(result.modelProvider, c.workspace);
         c.selection?.(defaults);
         started = await startTurn({});

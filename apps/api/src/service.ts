@@ -157,6 +157,9 @@ export class Service {
     return {
       id: run.id,
       workspace,
+      imageUrls: this.db.all(`SELECT i.mime,i.bytes FROM conversation_images i
+        JOIN user_messages u ON u.id=i.message_id WHERE u.id=? AND u.goal_id=? ORDER BY i.position`, run.key, goal.id)
+        .map(i => "data:" + i.mime + ";base64," + Buffer.from(i.bytes).toString("base64")),
       managedCommission: !!this.db.one(
         "SELECT 1 FROM managed_commissions WHERE goal_id=? AND workspace_id=?",
         goal.id,

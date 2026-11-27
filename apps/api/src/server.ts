@@ -12,6 +12,7 @@ import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
 import { conversationRunProgress, conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
+import { registerChatImages } from "./chat-images.ts";
 import { messageFile, openDocument } from "./message-files.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import { goalUsage, workspaceUsage, recentCalls } from "./usage.ts";
@@ -96,6 +97,7 @@ export async function createServer(
           : redact((err as Error).message),
     });
   });
+  registerChatImages(app, db);
   type Req = { id: string; body: any; q: Record<string, string> };
   const route = (
     method: "GET" | "POST" | "PATCH",

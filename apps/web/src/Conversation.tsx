@@ -1,3 +1,4 @@
+import { chatImageUrl, imageTypes, maxImageBytes, maxImages } from "../../../packages/contracts/src/chat-images.ts";
 import { RunProgressList } from "./RunProgressList.tsx";
 import { logPage } from "./conversation-log.ts";
 import { messageQuote, type ReplyQuote } from "./reply-quote.ts";
@@ -28,6 +29,39 @@ export function Conversation({ focus, live }: { focus?: string; live: boolean })
     [target, setTarget] = useState<Data | null>(null),
     [error, setError] = useState(""),
     [offline, setOffline] = useState(false);
+  const [images, setImages] = useState<{ id: string; size: number }[]>(() => {
+    try { return JSON.parse(conversationStorage().getItem("main-draft-images") || "[]"); }
+    catch { return []; }
+  });
+  const [uploading, setUploading] = useState(false);
+  const pasteInFlight = useRef(false);
+  function changeImages(next: typeof images) {
+    draftKey.current = crypto.randomUUID();
+    setImages(next);
+    if (next.length) conversationStorage().setItem("main-draft-images", JSON.stringify(next));
+    else conversationStorage().removeItem("main-draft-images");
+  }
+  async function pasteImages(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files).filter(file => file.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    if (pasteInFlight.current) return;
+    setError("");
+    if (files.some(file => !imageTypes.includes(file.type))) return setError("请粘贴 PNG、JPEG 或 WebP 图片");
+    if (images.length + files.length > maxImages) return setError("每条消息最多发送 4 张图片");
+    if ([...files, ...images].reduce((total, file) => total + file.size, 0) > maxImageBytes)
+      return setError("每条消息的图片合计最多 8 MB");
+    pasteInFlight.current = true;
+    setUploading(true);
+    try {
+      const added = await Promise.all(files.map(async file => {
+        const { id } = await api("/conversation/images", file);
+        return { id, size: file.size };
+      }));
+      changeImages([...images, ...added]);
+    } catch (err) { setError((err as Error).message); }
+    finally { pasteInFlight.current = false; setUploading(false); }
+  }
   const draftKey = useRef(crypto.randomUUID()),
     refresh = useRef<() => void>(() => {}),
     earlier = useRef<() => void>(() => {}),
@@ -188,7 +222,7 @@ export function Conversation({ focus, live }: { focus?: string; live: boolean })
     }
   }, [visible.at(-1)?.id]);
   const send = (quick = false) => {
-    if (!quick && !text.trim()) return;
+    if (!quick && (pasteInFlight.current || (!text.trim() && !images.length))) return;
     jumpToSent.current = true;
     setError("");
     let quote: ReplyQuote | undefined;
@@ -198,9 +232,11 @@ export function Conversation({ focus, live }: { focus?: string; live: boolean })
     }
     queueMessage({
       key: quick ? crypto.randomUUID() : draftKey.current, text: quick ? "现在都怎么样了？" : text.trim(),
+      ...(!quick && images.length ? { images: images.map(i => i.id) } : {}),
       ...(quote?.type === "message" ? { replyTo: quote.id } : quote ? { focus: quote.id } : {}),
     }, quote);
     if (!quick) {
+      changeImages([]);
       setText("");
       conversationStorage().removeItem("main-draft");
       setReply(null);
@@ -255,12 +291,19 @@ export function Conversation({ focus, live }: { focus?: string; live: boolean })
               </button>
             </div>
           )}
+          {!!images.length && <div className="chat-image-list">{images.map((image, index) =>
+            <div key={image.id} className="draft-image">
+              <img src={chatImageUrl(image.id)} alt={`待发送图片 ${index + 1}`} />
+              <button type="button" disabled={uploading} aria-label={`移除图片 ${index + 1}`} onClick={() => changeImages(images.filter(i => i.id !== image.id))}><X size={14}/></button>
+            </div>)}</div>}
+          {uploading && <small role="status">正在读取图片…</small>}
           <div className="compose-entry">
             <textarea
               aria-label="发到主对话"
               name="message"
               ref={editor}
               value={text}
+              onPaste={pasteImages}
               onKeyDown={(e) => {
                 if (
                   !e.nativeEvent.isComposing &&
@@ -278,13 +321,13 @@ export function Conversation({ focus, live }: { focus?: string; live: boolean })
               }}
               maxLength={4000}
               rows={1}
-              placeholder="交代事情，或问问进度…"
+              placeholder="交代事情，或粘贴图片…"
             />
             <button
               className="send-btn"
               aria-label="发送"
               title="发送（⌘↵）"
-              disabled={!text.trim()}
+              disabled={uploading || (!text.trim() && !images.length)}
             >
               <ArrowUp size={18} />
             </button>
