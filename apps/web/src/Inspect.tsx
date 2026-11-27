@@ -27,6 +27,7 @@ import {
 import { Limits } from "./Goals.tsx";
 import { TokenUsage } from "./TokenUsage.tsx";
 import { RestartService } from "./RestartService.tsx";
+import { ConversationLogViewer } from "./ConversationLogViewer.tsx";
 import { decisionCopy } from "./decision-copy.ts";
 export function Inbox({ id }: { id?: string }) {
   const { data, error } = useData("/inbox"),
@@ -642,6 +643,7 @@ export function Settings() {
         </dl>
         {d.service && <RestartService instance={d.service.instance} canRestart={d.service.canRestart} />}
       </section>
+      <ConversationLogViewer />
     </>
   );
 }

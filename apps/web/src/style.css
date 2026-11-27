@@ -1118,6 +1118,14 @@ dialog::backdrop {
 .section-disclosure h2, .section-disclosure h3 { font-size: .95rem; margin: 12px 0 6px; }
 .section-disclosure .story { padding-inline: 0; }
 .section-disclosure .story + .story { border-top: 1px solid var(--rule); }
+.conversation-log-list {
+  max-height: 24rem;
+  overflow: auto;
+  margin-top: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.conversation-log-list time { color: var(--ink); }
+.conversation-log-list dd { min-width: 0; overflow-wrap: anywhere; }
 .goal-header { margin-bottom: 18px; }
 .goal-topline, .goal-topline .back, .goal-facts, .goal-facts span {
   display: flex;
