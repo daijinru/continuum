@@ -69,3 +69,20 @@ API 先在事务中登记运行并占用该目标的执行名额。适配器取�
 一次性计划和间隔计划保存下一次执行时间、租约、尝试次数和错误。先占用租约，再用「计划编号 + 原触发时间」作为本轮唯一键。重启后遇到同一键时复用已登记运行。实际派发之后发生错误时暂停该计划，避免重复执行。派发前的可恢复错误最多尝试三次。目标暂停、额度已满、处于冷却期或有活跃运行时，调度器不会开启另一轮。
 
 演示适配器可以从持久化的待批请求恢复等待。真实进程的审批句柄随连接失效。恢复过程只查询历史并回填已完成事项，继续运行需要新一轮明确指令。
+
+### 在本机追查两条消息是否一起到达
+
+工作台会在当前数据目录的 `continuum.sqlite` 中保留最近约两万条主对话诊断记录。设置里的「本地服务」可查看数据库位置。在该目录执行：
+
+```sh
+sqlite3 -readonly -header -column continuum.sqlite "SELECT seq,at,client_at,stage,page_id,message_id,version FROM conversation_log ORDER BY seq DESC LIMIT 100"
+```
+
+时间均为 UTC，`client_at` 是页面实际观察到事件的时间，`at` 是服务写日志的时间。按以下顺序核对同一个消息 ID、页面 ID 和变更版本：
+
+- 用户消息从页面 `queued → sending` 到服务 `received → handling`。发送失败记为 `send_failed`，处理失败记为 `handling_failed`。重试沿用消息 ID。
+- 后台消息在 SQLite 事务提交时留下 `committed` 记录。与 `main_messages.id` 关联即可查消息类型及来源。来源为 `run:<运行编号>` 的最终回复可关联 `raw_events.run_id`，比较执行器回复和运行结束的 `received` 时间。普通执行说明留在运行记录。
+- 服务对每条 SSE 连接记录 `stream_write` 的版本。一次通知可以覆盖多个较小版本。按同一个 `page_id` 查找不低于目标版本的 `notice`（页面收到通知）和 `applied`（主对话已应用该批数据），再按消息 ID 查 `on_screen`（消息行进入可见区域）。这不代表用户已阅读。
+- 窗口切换和连线异常可查 `hidden / visible`、`stream_open / stream_close`、`disconnected`、`backpressure / drain`、`load_failed`。页面回执在本机分批写入，突然退出、离线或旧版本页面可能缺少回执。缺失回执本身不足以证明阻塞。
+
+诊断表只记录阶段、标识、时间和版本。委托正文、命令、审批内容和会话凭据不写入诊断表。

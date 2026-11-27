@@ -1,3 +1,4 @@
+import { logPage } from "./conversation-log.ts";
 import { messageQuote, type ReplyQuote } from "./reply-quote.ts";
 import { messageKey } from "./chat-row-state.ts";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -15,6 +16,10 @@ export function Conversation({ focus }: { focus?: string }) {
   const [{ rows: messages, firstIndex }, setHistory] = useState({ rows: [] as Data[], firstIndex: 1 }),
     [more, setMore] = useState(false),
     [loaded, setLoaded] = useState(false);
+  const [appliedVersion, setAppliedVersion] = useState<number>();
+  useEffect(() => {
+    if (appliedVersion !== undefined) logPage("applied", { version: appliedVersion });
+  }, [appliedVersion]);
   const [text, setText] = useState(
       () => conversationStorage().getItem("main-draft") || "",
     ),
@@ -109,11 +114,13 @@ export function Conversation({ focus }: { focus?: string }) {
             }
           }
         } while (pending && !document.hidden);
+        setAppliedVersion(version);
         setOffline(false);
         // An older local service supplies neither a cursor nor change events.
         if (version === undefined) retry = setTimeout(load, 2500);
       } catch {
         if (alive) {
+          logPage("load_failed");
           setOffline(true);
           retry = setTimeout(load, 2500);
         }
@@ -130,14 +137,16 @@ export function Conversation({ focus }: { focus?: string }) {
     earlier.current = () => { older = true; void load(); };
     window.addEventListener("conversation-changed", changed);
     window.addEventListener("conversation-disconnected", disconnected);
-    document.addEventListener("visibilitychange", load);
+    const visibility = () => { logPage(document.hidden ? "hidden" : "visible"); void load(); };
+    document.addEventListener("visibilitychange", visibility);
+    logPage(document.hidden ? "hidden" : "visible");
     void load();
     return () => {
       alive = false;
       clearTimeout(retry);
       window.removeEventListener("conversation-changed", changed);
       window.removeEventListener("conversation-disconnected", disconnected);
-      document.removeEventListener("visibilitychange", load);
+      document.removeEventListener("visibilitychange", visibility);
     };
   }, []);
   const receipt = outbox.findLast(entry => entry.status === "sent")?.submission.key;

@@ -255,7 +255,18 @@ export class MainConversation {
     this.route = route;
   }
   send(input: Send) {
-    const task = this.tail.then(() => this.handle(input));
+    const log = (stage: string) =>
+      this.s.db.run("INSERT INTO conversation_log(stage,message_id) VALUES(?,?)", stage, input.key);
+    log("received");
+    const task = this.tail.then(async () => {
+      log("handling");
+      try {
+        return await this.handle(input);
+      } catch (err) {
+        log("handling_failed");
+        throw err;
+      }
+    });
     this.tail = task.catch(() => {});
     return task;
   }

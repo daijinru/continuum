@@ -137,6 +137,7 @@ export const outputs: Record<string, ZodTypeAny> = {
   }),
   "GET /system/monitor": monitor,
   "GET /conversation/work-status": workStatus,
+  "POST /conversation/log": z.boolean(),
   "GET /agent-connections": z.array(connection),
   "POST /agent-connections/check": row({
     installed: z.boolean(),

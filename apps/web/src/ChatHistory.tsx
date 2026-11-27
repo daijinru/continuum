@@ -1,3 +1,4 @@
+import { observeMessage } from "./conversation-log.ts";
 import React, { memo, useEffect, useState, useLayoutEffect, useRef, type RefObject } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
@@ -171,8 +172,10 @@ export default memo(function ChatHistory({
             className={"chat-column chat-row" + (divided ? " divided" : "")}
             data-message-id={m.id}
             tabIndex={-1}
-            ref={focusOnMount.current === m.id ? el => {
+            ref={el => {
               if (!el) return;
+              const unobserve = observeMessage(el);
+              if (focusOnMount.current !== m.id) return unobserve;
               // Virtuoso briefly hides rows while measuring the new viewport.
               let frame: number;
               const focus = () => {
@@ -184,8 +187,8 @@ export default memo(function ChatHistory({
                 focusOnMount.current = null;
               };
               frame = requestAnimationFrame(focus);
-              return () => cancelAnimationFrame(frame);
-            } : undefined}
+              return () => { unobserve(); cancelAnimationFrame(frame); };
+            }}
           >
             <ChatRowState.Provider
               value={{ values: memory.current, id: messageKey(m) }}
