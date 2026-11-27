@@ -64,9 +64,9 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 `pr submit` 启用自动合并后保持运行。每 15 秒查询该 PR 当前 HEAD 的状态；检查尚未登记、正在排队或已绿但尚未合并时都会继续等。状态变化写入 stderr；最终回执写入 stdout。只有 GitHub 确认此 PR `MERGED` 到 `main` 且返回 `mergeCommit.oid` 才以 0 退出。本仓库要求的 lint 只代表静态规则通过，仍应按改动验证功能。
 
-**由提交 PR 的开发会话负责修复和接续。** `pnpm harness pr watch N` 可从仓库的任何工作树只读跟进同一 PR；`N` 是 PR 编号，不是 Issue 编号。关闭终端后不在后台运行，恢复会话时重新执行即可。
+**由提交 PR 的开发会话负责修复和接续。** `pnpm harness pr watch N` 可从仓库的任何工作树只读跟进同一 PR；`N` 是 PR 编号，不是 Issue 编号。负责交付的会话用 `pnpm harness pr watch N --finish` 接续监听和本地收尾。
 
-- `checks_failed`：回执含失败名称、结论及详情链接。打开失败作业，或用 `gh run view <run-id> --log-failed` 看日志。代码问题在原分支修复，验证、提交并 `commit push`；确认为临时基础设施故障才重跑失败作业。接着 `pr watch N` 看最新 HEAD，不重开 PR，也不以旧作业绿灯为准。
+- `checks_failed`：回执含失败名称、结论及详情链接。打开失败作业，或用 `gh run view <run-id> --log-failed` 看日志。代码问题在原分支修复，验证、提交并 `commit push`；确认为临时基础设施故障才重跑失败作业。接着 `pr watch N --finish` 看最新 HEAD，不重开 PR，也不以旧作业绿灯为准。
 - `behind` / `conflicts`：在原工作分支同步 `origin/main`，按需解决冲突、验证并推送，然后继续监听。`auto_merge_off`：核对原因后，若仍应合并，在原分支重新执行 `pr submit --issue N`。
 - `review`、`draft`、`closed` 或目标分支不符：回执非零退出，核对所需审批或原意。读取暂时失败会退避重试，连续三次失败或状态 30 分钟不变时交回会话诊断；处理后接续，不能据此宣称已合入。
 
@@ -74,7 +74,11 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 GitHub 仓库设置 **Automatically delete head branches** 已开启。合并 PR 后由 GitHub 删除同仓源分支（受保护分支仍受规则限制）。这个设置不会删除开发者机器上的 `refs/heads/*`。本仓库默认分支是 `main`。
 
-默认按需清理本地分支。PR 合入后，在当前检出切回 `main` 并快进到最新的 `origin/main`，再运行：
+`pr submit` 收到 GitHub 的合并回执后，会在当前检出切回 `main`、快进到包含该次合并的 `origin/main`，然后执行分支清理。回执的 `local.cleanup` 列出本轮删除或保留的分支。仍有远端同名分支时，本地分支留待下次清理。
+
+如果当前检出已在做另一项任务、本地修改会被覆盖、`main` 无法快进，或网络中断，合并 SHA 仍然有效。回执保留 `outcome: merged`，并在 `local.status: pending` 下给出原因。处理原因后运行 `local.next` 里的 `pnpm harness pr watch N --finish`，可从原 PR 分支或 `main` 继续。成功收尾会返回 `local.status: complete`。
+
+平时也可以单独预览或执行清理：
 
 ```sh
 pnpm harness branch cleanup --dry-run   # 预览将删除和保留的分支

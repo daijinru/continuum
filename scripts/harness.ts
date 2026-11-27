@@ -16,8 +16,8 @@ const help = `Continuum 维护工具 · pnpm harness <操作>
   commit create --issue N "说明" -- 路径...
                                        仅提交已经审阅过的暂存区
   commit push                          核对分支所有任务提交属于同一 Issue，再推送
-  pr submit --issue N                  核对分支和 PR 的唯一任务，申请自动合并并监听
-  pr watch N                           按 PR 编号接续监听；仅确认已合入 main 时成功
+  pr submit --issue N                  提交 PR、监听合入，切回 main 并清理分支
+  pr watch N [--finish]                只读监听；加 --finish 接续本地收尾
   branch cleanup [--dry-run]           核对并清理已合并且不再使用的本地分支
   branch auto on|off|status            安装、停用或查看本检出的 macOS 自动清理
 返回 JSON；错误写 stderr，退出码非零。路径相对仓库根目录。`;
@@ -118,21 +118,40 @@ async function main(args: string[]) {
   const git = (...a: string[]) => run("git", a, root);
   checkRemote(git("remote", "get-url", "--all", "origin"));
   const [area, op, ...rest] = args;
-  if (area === "branch") {
-    requireArgs(op === "cleanup" || op === "auto");
-    return JSON.parse(
+  const branchCommand = (operation: string, ...args: string[]) =>
+    JSON.parse(
       run(
         process.execPath,
-        [resolve(root, "scripts/merged-branches.mjs"), op, ...rest],
+        [resolve(root, "scripts/merged-branches.mjs"), operation, ...args],
         root,
       ),
     );
+  if (area === "branch") {
+    requireArgs(op === "cleanup" || op === "auto");
+    return branchCommand(op, ...rest);
   }
   const staged = () =>
     git("diff", "--cached", "--no-renames", "--name-only", "-z")
       .split("\0")
       .filter(Boolean);
   const branch = () => git("branch", "--show-current").trim();
+  function requireIdleGit(...extraStates: string[]) {
+    if (
+      [
+        ...extraStates,
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+      ].some((name) =>
+        existsSync(resolve(root, git("rev-parse", "--git-path", name).trim())),
+      )
+    )
+      throw Error("先处理进行中的 Git 操作。");
+    if (git("ls-files", "-u")) throw Error("存在未解决的冲突。");
+  }
   const branchIssue = (sha: string, expected?: string) => {
     git(
       "fetch",
@@ -273,20 +292,96 @@ async function main(args: string[]) {
     const gh = (...args: string[]) => run("gh", args, root).trim();
     const view = (ref: string) =>
       JSON.parse(gh("pr", "view", ref, "-R", repo, "--json", watchFields));
-    const watch = async (ref: string) => {
+    const finish = (pr: Awaited<ReturnType<typeof watchPr>>) => {
+      const merged = pr.mergeCommit?.oid;
+      if (!merged || !pr.headRefOid || !pr.headRefName)
+        throw Error("缺少用于核对本地分支的 PR 提交信息。");
+      git(
+        "fetch",
+        "--no-tags",
+        "origin",
+        "refs/heads/main:refs/remotes/origin/main",
+      );
+      const target = git("rev-parse", "refs/remotes/origin/main").trim();
+      if (git("merge-base", merged, target).trim() !== merged)
+        throw Error("origin/main 尚未包含回执里的合并提交。");
+      requireIdleGit("BISECT_START");
+      const current = branch();
+      if (
+        current !== "main" &&
+        (current !== pr.headRefName ||
+          git("rev-parse", "HEAD").trim() !== pr.headRefOid)
+      )
+        throw Error(
+          "当前检出已离开本次 PR 的提交。请在原任务检出或 main 上接续。",
+        );
+      const main = git("rev-parse", "refs/heads/main").trim();
+      if (git("merge-base", main, target).trim() !== main)
+        throw Error("本地 main 有独立提交，无法快进。");
+
+      // Even a non-forced checkout can absorb a staged edit identical to a
+      // destination file. Preserve edits across both transitions, including renames.
+      const changed = (...args: string[]) =>
+        git("diff", "--no-renames", "--name-only", "-z", ...args, "--")
+          .split("\0")
+          .filter(Boolean);
+      const edits = [...staged(), ...changed()];
+      if (edits.length) {
+        const touched = new Set([
+          ...changed("HEAD", main),
+          ...changed(main, target),
+        ]);
+        if (edits.some((path) => touched.has(path)))
+          throw Error(
+            "未提交改动涉及切换或快进将更新的文件。请先处理这些文件。",
+          );
+      }
+      if (current !== "main") git("switch", "--no-overwrite-ignore", "main");
+      git(
+        "merge",
+        "--ff-only",
+        "--no-autostash",
+        "--no-overwrite-ignore",
+        target,
+      );
+      return {
+        status: "complete",
+        main: target,
+        cleanup: branchCommand("cleanup"),
+      };
+    };
+    const watch = async (ref: string, finishLocal: boolean) => {
+      const flag = finishLocal ? " --finish" : "";
       console.error(
-        `监听 ${ref}；中断后可用 pnpm harness pr watch <PR编号> 接续。`,
+        `监听 ${ref}；中断后可用 pnpm harness pr watch <PR编号>${flag} 接续。`,
       );
       const result = await watchPr(
         () => view(ref),
         (message) => console.error(message),
       );
       if (result.outcome !== "merged") process.exitCode = 1;
+      else if (finishLocal) {
+        try {
+          return { ...result, local: finish(result) };
+        } catch (err) {
+          return {
+            ...result,
+            local: {
+              status: "pending",
+              reason: (err as Error).message,
+              next: `pnpm harness pr watch ${result.number} --finish`,
+            },
+          };
+        }
+      }
       return result;
     };
     if (op === "watch") {
-      requireArgs(rest.length === 1 && /^[1-9]\d{0,9}$/.test(rest[0]));
-      return watch(rest[0]);
+      requireArgs(
+        /^[1-9]\d{0,9}$/.test(rest[0]) &&
+          (rest.length === 1 || (rest.length === 2 && rest[1] === "--finish")),
+      );
+      return watch(rest[0], rest[1] === "--finish");
     }
     requireArgs(op === "submit");
     const n = requiredIssue(rest);
@@ -412,7 +507,7 @@ async function main(args: string[]) {
           );
       }
     }
-    return watch(url);
+    return watch(url, true);
   }
   requireArgs(area === "commit");
   if (op === "log") {
@@ -457,20 +552,7 @@ async function main(args: string[]) {
     title?.trim() && !/[\r\n]/.test(title) && sep === "--" && files.length,
   );
   if (!branch()) throw Error("不在工作分支上。");
-  if (
-    [
-      "MERGE_HEAD",
-      "CHERRY_PICK_HEAD",
-      "REVERT_HEAD",
-      "rebase-apply",
-      "rebase-merge",
-      "sequencer",
-    ].some((name) =>
-      existsSync(resolve(root, git("rev-parse", "--git-path", name).trim())),
-    )
-  )
-    throw Error("先处理进行中的 Git 操作。");
-  if (git("ls-files", "-u")) throw Error("存在未解决的冲突。");
+  requireIdleGit();
   await issue(n);
   const actual = staged().sort();
   if (JSON.stringify(actual) !== JSON.stringify([...new Set(files)].sort()))

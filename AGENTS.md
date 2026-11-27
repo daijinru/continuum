@@ -9,5 +9,5 @@
 - **一次解决一件事。** 检查工作区，从最新 `origin/main` 为本项建立工作分支，或接续这项已有的分支和 PR。只暂存本项涉及的改动，同一文件夹杂其他改动时用 `git add -p`。不要用 `git add .`、重置工作区或替别人清空暂存区。
 - **先验证，再提交。** 运行与变更相关的检查，核对 `git diff --cached`。执行 `pnpm harness commit create --issue N "说明" -- 路径…`，确认回执含本次提交 SHA；提交保留 `Refs: #N`。不编造验证证据，不把本机数据库、凭据或真实委托内容发到 GitHub。
 - **提交 PR。** 取得本地提交 SHA 后，逐项核对分支相对 `origin/main` 的全部改动是否服务于本 Issue 的验收条件。发现第二个可独立验收的结果就拆出，再执行 `pnpm harness commit push` 和回执的 `next` 命令（`pnpm harness pr submit --issue N`）。
-- **跟到合入为止。** `pr submit` 默认持续监听；绿灯或启用自动合并不是完成。若返回失败检查，负责交付的 agent 读取对应日志，在同一分支修复、验证、推送，继续 `pr watch N`；分支落后就同步 `origin/main` 后再验。中断后按原 PR 编号接续。直到返回 `outcome: merged` 和合并 SHA 才报告合入；确需他人批准、权限或决定时才交代阻塞。
+- **跟到合入为止。** `pr submit` 默认持续监听；绿灯或启用自动合并不是完成。若返回失败检查，负责交付的 agent 读取对应日志，在同一分支修复、验证、推送，继续 `pr watch N --finish`；分支落后就同步 `origin/main` 后再验。中断后按原 PR 编号接续。若合入回执显示 `local.status: pending`，处理其中的原因后执行 `local.next` 完成本地收尾。直到返回 `outcome: merged` 和合并 SHA 才报告合入；确需他人批准、权限或决定时才交代阻塞。
 - **用回执报告完成。** 每项在对应 Issue 用一条消息汇总结果和链接，达到解决条件后关单。继续处理清单中的下一项，直到每项都达到用户指定的交付阶段。最终答复逐项列出 Issue、PR、合并 SHA 和实际验证结果。外部写入结果不确定时先回查。
