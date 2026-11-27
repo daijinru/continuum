@@ -17,7 +17,6 @@ import { AppCtx } from "./lib.tsx";
 import { Monitor } from "./Monitor.tsx";
 import { Today } from "./Feed.tsx";
 import { Conversation } from "./Conversation.tsx";
-import { Planner } from "./Planner.tsx";
 import { Goal, Goals } from "./Goals.tsx";
 import { Activity, Inbox, Run, Settings } from "./Inspect.tsx";
 import "./style.css";
@@ -244,8 +243,6 @@ function App() {
               <Activity />
             ) : page === "monitor" ? (
               <Monitor />
-            ) : page === "planner" ? (
-              <Planner />
             ) : page === "run" ? (
               <Run id={id} />
             ) : page === "settings" ? (

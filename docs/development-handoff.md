@@ -9,7 +9,6 @@ Continuum 是一个面向单用户、优先支持 macOS 的本地委托工作台
 - 用户在同一个主对话里用自然语言交代多件事、询问进度、纠正偏好，需要时才选择项目。委托详情用来核对单项工作的记录。
 - 交付要让用户知道发生了什么，以及接下来需要做什么。先给用户能读的报告或能打开的软件，需要追溯时再展开运行依据。
 - 石墨灰工作台采用窄侧栏、固定输入区和紧凑的消息流，靠文字、间距与分隔线区分层次。[界面设计与截图](../design-demos/macos/direction-approved.md)
-- 「计划室」是用 Continuum 开发的独立应用。其代码和早期原型分别在 [products/planroom](../products/planroom/README.md) 和 [examples/planner](../examples/planner/README.md)。
 
 ## 一条消息如何变成两项委托
 
