@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { realpathSync, lstatSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname } from "node:path";
 import { Rpc, type Packet } from "./rpc.ts";
+import { codexEnvironment } from "./cli.ts";
 import {
   redact,
   maskSecrets,
@@ -23,10 +24,9 @@ const exec = promisify(execFile);
 export async function checkCodex() {
   let version = "";
   try {
-    version = (
-      await exec("codex", ["--version"], { timeout: 5000 })
-    ).stdout.trim();
-    const login = await exec("codex", ["login", "status"], { timeout: 5000 });
+    const options = { timeout: 5000, env: codexEnvironment() };
+    version = (await exec("codex", ["--version"], options)).stdout.trim();
+    const login = await exec("codex", ["login", "status"], options);
     if (!/logged in/i.test(login.stdout + login.stderr))
       throw Error("未检测到登录");
     const rpc = new Rpc(

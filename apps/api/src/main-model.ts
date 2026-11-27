@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { Problem } from "./db.ts";
+import { codexEnvironment } from "../../../packages/codex-adapter/src/cli.ts";
 import type { TokenCounts } from "../../../packages/agent-core/src/index.ts";
 
 type Meter = (counts: TokenCounts) => void;
@@ -62,7 +63,7 @@ async function structured(prompt: string, schema: object, meter: Meter) {
           "answer.json",
           "-",
         ],
-        { cwd: dir, timeout: 75000, maxBuffer: 512_000 },
+        { cwd: dir, env: codexEnvironment(), timeout: 75000, maxBuffer: 512_000 },
         (error, stdout) => {
           try {
             readExecUsage(stdout, meter);
