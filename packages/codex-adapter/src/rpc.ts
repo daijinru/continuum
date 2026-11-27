@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { codexEnvironment } from "./cli.ts";
 import type { ClientRequest } from "../generated/ClientRequest.ts";
 import type { InitializeParams } from "../generated/InitializeParams.ts";
 import { redact } from "../../agent-core/src/index.ts";
@@ -30,6 +31,7 @@ export class Rpc {
   ) {
     this.proc = spawn("codex", ["app-server", "--stdio"], {
       cwd,
+      env: codexEnvironment(),
       stdio: "pipe",
       shell: false,
     });
