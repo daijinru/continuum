@@ -216,6 +216,11 @@ export function Goals() {
                         ? "查看运行记录"
                         : "可启动首轮任务"}{" "}
                   · {dt(g.updated)}
+                  {g.provider === "codex" && g.latest && (
+                    <span>
+                      最近一轮 · {g.latestModel || "模型未记录"} · {g.latestEffort ? "推理强度 " + g.latestEffort : "推理强度未记录"}
+                    </span>
+                  )}
                 </div>
               </div>
               <Badge value={g.state} />

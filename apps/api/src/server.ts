@@ -289,7 +289,19 @@ export async function createServer(
   });
   get("/goals", ({ q }) =>
     db.all(
-      "SELECT g.*,w.name workspace,CASE WHEN g.state='blocked' OR (g.state='active' AND EXISTS(SELECT 1 FROM directory_holds h WHERE h.goal_id=g.id AND h.resolved_at IS NULL)) THEN 'blocked' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.category='risk' AND st.verification='disputed') THEN 'at_risk' WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.verification='verified') THEN 'on_track' ELSE 'unknown' END health,(SELECT count(*) FROM inbox_items i WHERE i.goal_id=g.id AND i.status IN('pending','deferred')) pending,(SELECT status FROM agent_runs r WHERE r.goal_id=g.id ORDER BY created DESC LIMIT 1) latest FROM goals g JOIN workspaces w ON w.id=g.workspace_id ORDER BY g.updated DESC LIMIT ? OFFSET ?",
+      `SELECT g.*, w.name workspace,
+        CASE WHEN g.state='blocked' OR (g.state='active' AND EXISTS(SELECT 1 FROM directory_holds h WHERE h.goal_id=g.id AND h.resolved_at IS NULL)) THEN 'blocked'
+             WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.category='risk' AND st.verification='disputed') THEN 'at_risk'
+             WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.verification='verified') THEN 'on_track'
+             ELSE 'unknown' END health,
+        (SELECT count(*) FROM inbox_items i WHERE i.goal_id=g.id AND i.status IN('pending','deferred')) pending,
+        r.status latest, c.model latestModel, c.effort latestEffort
+       FROM goals g JOIN workspaces w ON w.id=g.workspace_id
+       LEFT JOIN agent_runs r ON r.rowid=(
+         SELECT ar.rowid FROM agent_runs ar WHERE ar.goal_id=g.id ORDER BY ar.created DESC, ar.rowid DESC LIMIT 1
+       )
+       LEFT JOIN model_calls c ON c.source=r.id
+       ORDER BY g.updated DESC LIMIT ? OFFSET ?`,
       page(q),
       offset(q),
     ),
@@ -444,7 +456,7 @@ export async function createServer(
   post("/runs/:id/reconcile", ({ id }) => s.reconcile(id));
   get("/goals/:id/runs", ({ id, q }) =>
     db.all(
-      "SELECT * FROM agent_runs WHERE goal_id=? ORDER BY created DESC LIMIT ? OFFSET ?",
+      "SELECT * FROM agent_runs WHERE goal_id=? ORDER BY created DESC, rowid DESC LIMIT ? OFFSET ?",
       id,
       page(q),
       offset(q),
