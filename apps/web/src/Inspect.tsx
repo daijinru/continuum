@@ -643,7 +643,7 @@ export function Settings() {
         </dl>
         {d.service && <RestartService instance={d.service.instance} canRestart={d.service.canRestart} />}
       </section>
-      <ConversationLogViewer />
+      <ConversationLogViewer directory={d.db} />
     </>
   );
 }

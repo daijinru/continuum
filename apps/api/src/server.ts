@@ -162,6 +162,21 @@ export async function createServer(
     `SELECT seq, at, stage, page_id, message_id, version, client_at
      FROM conversation_log ORDER BY seq DESC LIMIT 100`,
   ));
+  post("/conversation/log/open-folder", async ({ body }) => {
+    z.object({}).strict().parse(body);
+    if (process.platform !== "darwin" && process.platform !== "linux")
+      throw new Problem("当前系统不支持自动打开文件夹", 501);
+    try {
+      if (process.platform === "darwin") {
+        await promisify(execFile)("/usr/bin/open", ["-a", "Finder", db.home], { timeout: 10000 });
+      } else {
+        await promisify(execFile)("xdg-open", [db.home], { timeout: 10000 });
+      }
+    } catch {
+      throw new Problem("未能打开日志文件夹", 503);
+    }
+    return true;
+  });
   post("/conversation/log", ({ body }) => {
     const batch = pageLog.parse(body);
     db.tx(() => {
