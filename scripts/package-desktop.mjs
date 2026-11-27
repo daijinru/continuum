@@ -47,7 +47,26 @@ try {
   const { version } = JSON.parse(
     await readFile(require.resolve("electron/package.json"), "utf8"),
   );
+  const iconset = join(stage, "Continuum.iconset");
+  const icon = join(stage, "Continuum.icns");
+  await mkdir(iconset);
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      const pixels = String(size * scale);
+      const name = `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`;
+      execFileSync("sips", [
+        "-z",
+        pixels,
+        pixels,
+        "apps/desktop/assets/continuum.png",
+        "--out",
+        join(iconset, name),
+      ]);
+    }
+  }
+  execFileSync("iconutil", ["-c", "icns", iconset, "-o", icon]);
   const [dir] = await packager({
+    icon,
     dir: ui,
     out: resolve("apps/desktop/dist"),
     name: "Continuum",

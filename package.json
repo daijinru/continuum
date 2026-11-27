@@ -17,6 +17,7 @@
     "test": "node --test tests/*.test.ts",
     "test:e2e": "playwright test",
     "test:codex": "node scripts/check-codex.ts",
+    "desktop:dev": "vite build apps/web && electron apps/desktop/main.mjs",
     "desktop:package": "pnpm build && node scripts/package-desktop.mjs",
     "desktop:test": "node tests/desktop-lifecycle.mjs"
   },

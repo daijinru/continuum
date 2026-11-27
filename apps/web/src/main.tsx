@@ -11,7 +11,6 @@ import {
   Moon,
   PanelLeftClose,
   Menu,
-  Infinity as Loop,
 } from "lucide-react";
 import { AppCtx } from "./lib.tsx";
 import { Monitor } from "./Monitor.tsx";
@@ -118,9 +117,7 @@ function App() {
       <div className="shell">
         <aside id="navigation" className={menu ? "open" : ""}>
           <a className="brand" href="#chat">
-            <span className="symbol">
-              <Loop size={22} strokeWidth={2} />
-            </span>
+            <img src="/favicon.png" width="30" height="30" alt="" />
             Continuum
           </a>
           <div className="workspace-tag">

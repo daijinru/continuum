@@ -166,16 +166,6 @@ aside {
   color: var(--ink);
   padding-left: 7px;
 }
-.symbol {
-  width: 25px;
-  height: 25px;
-  display: grid;
-  place-items: center;
-  color: var(--ink);
-}
-.symbol svg {
-  transform: none;
-}
 .workspace-tag {
   display: flex;
   align-items: center;

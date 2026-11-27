@@ -8,11 +8,22 @@ import {
   Tray,
 } from "electron";
 import { fork } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+const development = !app.isPackaged;
+if (development) {
+  app.setName("Continuum Dev");
+  if (!app.commandLine.hasSwitch("user-data-dir")) {
+    const devProfile = join(app.getPath("appData"), app.getName());
+    mkdirSync(devProfile, { recursive: true, mode: 0o700 });
+    app.setPath("userData", devProfile);
+  }
+}
 const profile = app.getPath("userData");
-const root = join(process.resourcesPath, "workbench");
+const root = development
+  ? join(import.meta.dirname, "../..")
+  : join(process.resourcesPath, "workbench");
 let child, win, tray, address, retry;
 let wantWindow = true,
   quitting = false,
@@ -32,11 +43,12 @@ function environment() {
     throw Error("工作台数据目录和 Codex 工具目录需要绝对路径。");
   return {
     ...process.env,
+    PORT: process.env.PORT || (development ? "0" : "4317"),
     CONTINUUM_DATA: data,
     CONTINUUM_SEED: process.env.CONTINUUM_SEED ?? "0",
     PATH: [
       config.codexBinDirectory,
-      join(root, "bin"),
+      development ? undefined : join(root, "bin"),
       process.env.PATH,
       "/usr/local/bin",
       "/opt/homebrew/bin",
@@ -81,8 +93,11 @@ function showWindow() {
 
 function startService() {
   if (quitting || child) return;
-  const proc = fork(join(root, "apps/api/src/main.mjs"), [], {
-    execPath: join(root, "bin/node"),
+  const entry = development ? "apps/api/src/main.ts" : "apps/api/src/main.mjs";
+  const proc = fork(join(root, entry), [], {
+    execPath: development
+      ? process.env.npm_node_execpath || "node"
+      : join(root, "bin/node"),
     execArgv: [],
     cwd: root,
     env: serviceEnv,
@@ -165,6 +180,7 @@ function menu() {
     {
       label: "登录时启动 Continuum",
       type: "checkbox",
+      enabled: !development,
       checked: login.openAtLogin,
       click(item) {
         app.setLoginItemSettings({ openAtLogin: item.checked });
@@ -209,6 +225,8 @@ else {
   app
     .whenReady()
     .then(() => {
+      if (development)
+        app.dock?.setIcon(join(import.meta.dirname, "assets/continuum.png"));
       wantWindow = !app.getLoginItemSettings().wasOpenedAtLogin;
       app.on("activate", showWindow);
       tray = new Tray(nativeImage.createEmpty());
