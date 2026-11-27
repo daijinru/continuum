@@ -16,7 +16,9 @@
     "db:migrate": "node scripts/migrate.ts",
     "test": "node --test tests/*.test.ts",
     "test:e2e": "playwright test",
-    "test:codex": "node scripts/check-codex.ts"
+    "test:codex": "node scripts/check-codex.ts",
+    "desktop:package": "pnpm build && node scripts/package-desktop.mjs",
+    "desktop:test": "node tests/desktop-lifecycle.mjs"
   },
   "dependencies": {
     "fastify": "5.6.2",
@@ -26,10 +28,13 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
     "@playwright/test": "1.55.0",
     "@types/node": "24.10.1",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
+    "electron": "45.5.0",
+    "esbuild": "0.28.2",
     "eslint": "9.39.1",
     "prettier": "3.6.2",
     "typescript": "5.9.3",

@@ -6,7 +6,11 @@ async function shutdown(restart: boolean) {
   closing = true;
   try {
     await app.close();
-    if (restart && execve) {
+    if (process.send) {
+      // The desktop parent owns restarts and waits for the old database owner.
+      process.exitCode = restart ? 75 : 0;
+      if (process.connected) process.disconnect();
+    } else if (restart && execve) {
       const env = Object.fromEntries(
         Object.entries(process.env).filter(
           (pair): pair is [string, string] => typeof pair[1] === "string",
@@ -29,7 +33,7 @@ async function shutdown(restart: boolean) {
 const { app } = await createServer({
   seed: process.env.CONTINUUM_SEED !== "0",
   restart:
-    execve && process.platform !== "win32"
+    process.send || (execve && process.platform !== "win32")
       ? () => void shutdown(true)
       : undefined,
 });
@@ -38,5 +42,10 @@ const url = await app.listen({
   port: Number(process.env.PORT || 4317),
 });
 console.log("Continuum " + url);
+if (process.send) {
+  process.once("disconnect", () => void shutdown(false));
+  if (process.connected) process.send({ ready: url });
+  else void shutdown(false);
+}
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.once(signal, () => void shutdown(false));
