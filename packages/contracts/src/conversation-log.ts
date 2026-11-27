@@ -13,3 +13,14 @@ export const pageLog = z.object({
   events: z.array(pageEvent).min(1).max(64),
 }).strict();
 export type PageEvent = z.infer<typeof pageEvent>;
+
+export const conversationLogEntry = z.object({
+  seq: z.number().int(),
+  at: z.string(),
+  stage: z.string(),
+  page_id: z.string().nullable(),
+  message_id: z.string().nullable(),
+  version: z.number().int().nullable(),
+  client_at: z.string().nullable(),
+});
+export type ConversationLogEntry = z.infer<typeof conversationLogEntry>;
