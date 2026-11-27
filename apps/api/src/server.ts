@@ -1,3 +1,4 @@
+import { pageLog } from "../../../packages/contracts/src/conversation-log.ts";
 import Fastify, { type FastifyReply } from "fastify";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
@@ -157,6 +158,15 @@ export async function createServer(
      WHERE i.goal_id=? AND i.kind='approval' AND m.seq<? ORDER BY m.seq DESC LIMIT 30`,
     id, q.before ? offset({offset: q.before}) : Number.MAX_SAFE_INTEGER,
   ));
+  post("/conversation/log", ({ body }) => {
+    const batch = pageLog.parse(body);
+    db.tx(() => {
+      for (const e of batch.events)
+        db.run("INSERT INTO conversation_log(stage,page_id,message_id,version,client_at) VALUES(?,?,?,?,?)",
+          e.stage, batch.page, e.message ?? null, e.version ?? null, e.at);
+    });
+    return true;
+  });
   post("/conversation/messages", async ({ body }) => {
     const { id } = await conversation.send(sendInput.parse(body));
     return db.must("SELECT id,seq,created,body FROM main_messages WHERE id=?", id);
@@ -623,15 +633,21 @@ export async function createServer(
       "X-Accel-Buffering": "no",
     });
     res.write(": connected\n\n");
+    const client = z.string().uuid().safeParse((req.query as Record<string,string>).page);
+    const trace = (stage: string, version?: number) =>
+      db.run("INSERT INTO conversation_log(stage,page_id,version) VALUES(?,?,?)", stage, client.success ? client.data : null, version ?? null);
+    trace("stream_open");
     let blocked = false, chatCursor = -1, latestChat = chatVersion();
     const drain = () => {
       blocked = true;
-      res.once("drain", () => { blocked = false; flush(); });
+      trace("backpressure", chatCursor);
+      res.once("drain", () => { trace("drain", chatCursor); blocked = false; flush(); });
     };
     const flush = () => {
       if (blocked || res.destroyed || res.writableEnded) return;
       if (chatCursor !== latestChat) {
         chatCursor = latestChat;
+        trace("stream_write", chatCursor);
         if (!res.write("event: conversation\ndata: " + chatCursor + "\n\n")) return drain();
       }
       for (;;) {
@@ -664,6 +680,7 @@ export async function createServer(
       if (!blocked && !res.writableEnded) res.write(": heartbeat\n\n");
     }, 15000);
     res.on("close", () => {
+      if (db.db.isOpen) trace("stream_close", chatCursor);
       streams.delete(res);
       clearInterval(timer);
       s.bus.off("conversation", chatChanged);

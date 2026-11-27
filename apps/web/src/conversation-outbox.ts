@@ -1,3 +1,4 @@
+import { logPage } from "./conversation-log.ts";
 import type { ReplyQuote } from "./reply-quote.ts";
 import { useSyncExternalStore } from "react";
 import { api, type Data } from "./lib.tsx";
@@ -83,9 +84,11 @@ async function deliver() {
             row.submission.key === submission.key ? { ...row, ...fields } : row,
           ),
         );
+      logPage("sending", { message: submission.key });
       change({ status: "sending", error: undefined });
       try {
         const receipt = await api("/conversation/messages", submission);
+        logPage("accepted", { message: submission.key });
         change({
           status: "sent",
           seq: receipt.seq,
@@ -96,6 +99,7 @@ async function deliver() {
           },
         });
       } catch (e) {
+        logPage("send_failed", { message: submission.key });
         change({
           status: "failed",
           error:
@@ -112,6 +116,7 @@ async function deliver() {
 
 export function queueMessage(submission: Submission, quote?: ReplyQuote) {
   if (entries.some((entry) => entry.submission.key === submission.key)) return;
+  logPage("queued", { message: submission.key });
   publish([
     ...entries,
     { submission, quote, created: new Date().toISOString(), status: "queued" },

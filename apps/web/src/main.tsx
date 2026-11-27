@@ -1,3 +1,4 @@
+import { logPage, pageId } from "./conversation-log.ts";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -72,17 +73,20 @@ function App() {
     let timer: ReturnType<typeof setTimeout>;
     const es = new EventSource(
       "/api/v1/stream?cursor=" +
-        Number(sessionStorage.getItem("continuum-seq") || 0),
+        Number(sessionStorage.getItem("continuum-seq") || 0) + "&page=" + pageId,
     );
     es.onopen = () => {
+      logPage("connected");
       setLive(true);
       setRev((v) => v + 1);
     };
     es.onerror = () => {
+      logPage("disconnected");
       setLive(false);
       window.dispatchEvent(new Event("conversation-disconnected"));
     };
     es.addEventListener("conversation", e => {
+      logPage("notice", { version: Number(e.data) });
       window.dispatchEvent(new CustomEvent("conversation-changed", { detail: Number(e.data) }));
     });
     es.addEventListener("change", (e) => {

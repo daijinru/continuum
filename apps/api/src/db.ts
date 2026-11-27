@@ -88,6 +88,7 @@ export class Store {
       "014_conversation_changes.sql",
       "015_main_reply_goal.sql",
       "016_followup_questions.sql",
+      "017_conversation_log.sql",
     ].entries()) {
       const version = index + 1;
       const migrated =
