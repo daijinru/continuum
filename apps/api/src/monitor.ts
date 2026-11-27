@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { now, type Store } from "./db.ts";
-import type { MonitorSnapshot } from "../../../packages/contracts/src/monitor.ts";
+import type { MonitorSnapshot, WorkStatus } from "../../../packages/contracts/src/monitor.ts";
 
 type Processes = NonNullable<MonitorSnapshot["processes"]>;
 const exec = promisify(execFile);
@@ -80,6 +80,25 @@ export function processSampler(roots: () => Map<number, string>) {
     }
     return previous;
   };
+}
+
+export function conversationWorkStatus(db: Store, watching: ReadonlyMap<string, unknown>): WorkStatus {
+  const decisions = db.all(`
+    SELECT id, goal_id FROM inbox_items i WHERE status IN ('pending','deferred')
+      AND (allow_for_run=0 AND masked_command=0 OR
+        EXISTS(SELECT 1 FROM main_messages WHERE origin='inbox:'||i.id))
+    ORDER BY created, rowid`);
+  if (decisions.length) {
+    const count = new Set(decisions.map(item => item.goal_id)).size;
+    return { kind: "decision", count, targetId: count === 1 ? decisions[0].id : null };
+  }
+
+  const active = new Set(watching.keys());
+  for (const run of db.all("SELECT goal_id FROM agent_runs WHERE finished IS NULL AND status IN ('starting','running')")) {
+    active.add(run.goal_id);
+  }
+  if (!active.size) return null;
+  return { kind: "working", count: active.size, targetId: active.size === 1 ? [...active][0] : null };
 }
 
 export function monitorTasks(

@@ -1174,6 +1174,20 @@ dialog::backdrop {
   background: var(--soft);
   color: var(--ink);
 }
+.topbar .work-status {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.topbar .needs-decision {
+  background: var(--soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+@media (max-width: 420px) {
+  .topbar:has(.work-status) .brief-label {
+    display: none;
+  }
+}
 .chat-surface {
   height: 100dvh;
   display: flex;

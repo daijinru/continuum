@@ -1,6 +1,13 @@
 import { z } from "zod";
 
 const id = z.string().uuid();
+export const workStatus = z.object({
+  kind: z.enum(["decision", "working"]),
+  count: z.number().int().positive(),
+  targetId: id.nullable(),
+}).nullable();
+export type WorkStatus = z.infer<typeof workStatus>;
+
 export const monitor = z.object({
   sampledAt: z.string().datetime(),
   processes: z
