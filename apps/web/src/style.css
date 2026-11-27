@@ -1321,7 +1321,18 @@ dialog::backdrop {
 .chat-message .markdown-body p {
   color: var(--ink);
 }
-.chat-message .markdown-body a {
+.markdown-body .message-file {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.chat-message .markdown-body :is(a, .message-file) {
   text-underline-offset: 3px;
 }
 .chat-message .message-links { gap: 14px; margin-top: 7px; }
