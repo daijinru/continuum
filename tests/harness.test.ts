@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -283,7 +285,7 @@ test("本地清理只删已合并、远端已删、PR 尖端一致且无 worktre
 function publicationFixture(t: import("node:test").TestContext) {
   const { git, dir, file, harness } = fixture(t);
   git("commit", "--allow-empty", "-qm", "base");
-  git("init", "--bare", "-q", "upstream.git");
+  git("init", "--bare", "-qb", "main", "upstream.git");
   git("push", "./upstream.git", "HEAD:refs/heads/main");
   git("switch", "-qc", "feature");
   const realGit = spawnSync("which", ["git"], {
@@ -295,7 +297,8 @@ function publicationFixture(t: import("node:test").TestContext) {
 const fs = require("node:fs"), cp = require("node:child_process");
 const args = process.argv.slice(2);
 if (args[0] === "fetch") args[args.indexOf("origin")] = "./upstream.git";
-if (args[0] === "ls-remote") console.log(cp.execFileSync(${JSON.stringify(realGit)}, ["rev-parse","HEAD"], {encoding:"utf8"}).trim()+"\\t"+args[2]);
+if (args[0] === "ls-remote" && args[1] === "--heads") process.stdout.write(cp.execFileSync(${JSON.stringify(realGit)},["ls-remote","--heads","./upstream.git"]));
+else if (args[0] === "ls-remote") console.log(cp.execFileSync(${JSON.stringify(realGit)}, ["rev-parse","HEAD"], {encoding:"utf8"}).trim()+"\\t"+args[2]);
 else if (args[0] === "push" && args[1] === "origin") fs.appendFileSync("writes","push\\n");
 else process.exit(cp.spawnSync(${JSON.stringify(realGit)},args,{stdio:"inherit"}).status);
 `,
@@ -311,13 +314,22 @@ const pr=JSON.parse(fs.readFileSync("pr.json"));
 const write=op=>fs.appendFileSync("writes",op+"\\n");
 let output;
 if(args.includes("repos/daijinru/continuum/rules/branches/main")) output=[{type:"required_status_checks",parameters:{required_status_checks:[{context:"lint",integration_id:15368}]}}];
+else if(args[0]==="repo" && args[1]==="view") output={defaultBranchRef:{name:"main"}};
+else if(args[1]==="list" && args.includes("merged")){
+  if(pr.cleanupOffline) process.exit(1);
+  output=pr.receipt?[pr.receipt]:[];
+}
 else if(args[1]==="list") output=pr.exists?[{url,headRepositoryOwner:{login:"daijinru"}}]:[];
 else if(args[1]==="create"){write("create");pr.body=args.at(-1);pr.exists=true;output=url;}
 else if(args.includes("PATCH")){write("patch");pr.body=JSON.parse(fs.readFileSync(0)).body;output={};}
-else if(args[1]==="merge"){write("merge");output="";}
+else if(args[1]==="merge"){
+  write("merge");
+  if(pr.receipt) require("node:child_process").execFileSync(${JSON.stringify(realGit)}, ["push","./upstream.git","HEAD:refs/heads/main"]);
+  output="";
+}
 else if(args[1]==="view" && args.at(-1).includes("closingIssuesReferences"))
   output={number:55,body:pr.body,closingIssuesReferences:pr.links ?? (pr.body.endsWith("Closes #42")?[{url:${JSON.stringify(target)}}]:[])};
-else if(args[1]==="view") output={state:"MERGED",baseRefName:"main",mergeCommit:{oid:"merged"}};
+else if(args[1]==="view") output=pr.receipt ?? {state:"MERGED",baseRefName:"main",mergeCommit:{oid:"merged"}};
 else process.exit(2);
 fs.writeFileSync("pr.json",JSON.stringify(pr));
 console.log(typeof output === "string" ? output : JSON.stringify(output));`,
@@ -423,3 +435,92 @@ test("发布使用同一真实 Issue，核对 GitHub 关联后才开启合并", 
     assert.equal(writes(), "");
   }
 });
+
+for (const interrupted of [false, true]) {
+  test(
+    interrupted
+      ? "已合入的 PR 可在处理本地改动及网络恢复后接续收尾"
+      : "pr submit 合入后切回 main、仅快进并自动清理",
+    (t) => {
+      const { git, file, dir, harness, submit } = publicationFixture(t);
+      mkdirSync(join(dir, "scripts"));
+      copyFileSync(
+        new URL("../scripts/merged-branches.mjs", import.meta.url),
+        join(dir, "scripts/merged-branches.mjs"),
+      );
+      file("delivery.txt", "deliver\n");
+      git("add", "delivery.txt");
+      git("commit", "-qm", "deliver", "-m", "Refs: #42");
+      const sha = git("rev-parse", "HEAD").trim();
+      const pr = {
+        exists: true,
+        body: "Closes #42",
+        cleanupOffline: false,
+        receipt: {
+          number: 55,
+          state: "MERGED",
+          baseRefName: "main",
+          headRefName: "feature",
+          headRefOid: sha,
+          mergeCommit: { oid: sha },
+          isCrossRepository: false,
+          statusCheckRollup: [],
+        },
+      };
+      file("pr.json", JSON.stringify(pr));
+      file("keep.txt", "my index");
+      git("add", "keep.txt");
+      file("keep.txt", "my working copy");
+      if (interrupted) file("delivery.txt", "my changes");
+      const submitted = submit();
+      assert.equal(submitted.status, 0, submitted.stderr);
+      let receipt = JSON.parse(submitted.stdout);
+      assert.equal(receipt.outcome, "merged");
+      const resume = () =>
+        JSON.parse(harness("pr", "watch", "55", "--finish").stdout);
+      if (interrupted) {
+        assert.equal(receipt.local.status, "pending");
+        assert.match(receipt.local.reason, /未提交改动/);
+        assert.equal(receipt.local.next, "pnpm harness pr watch 55 --finish");
+        assert.equal(git("branch", "--show-current").trim(), "feature");
+        assert.equal(
+          readFileSync(join(dir, "delivery.txt"), "utf8"),
+          "my changes",
+        );
+        git("restore", "--", "delivery.txt");
+        const observed = harness("pr", "watch", "55");
+        assert.equal(observed.status, 0);
+        assert.equal(JSON.parse(observed.stdout).local, undefined);
+        assert.equal(git("branch", "--show-current").trim(), "feature");
+        git("switch", "-qc", "another-task");
+        assert.equal(resume().local.status, "pending");
+        assert.equal(git("branch", "--show-current").trim(), "another-task");
+        git("switch", "-q", "feature");
+        file("pr.json", JSON.stringify({ ...pr, cleanupOffline: true }));
+        receipt = resume();
+        assert.equal(receipt.mergeCommit.oid, sha);
+        assert.equal(receipt.local.status, "pending");
+        assert.equal(git("branch", "--show-current").trim(), "main");
+        assert.equal(git("rev-parse", "feature").trim(), sha);
+        file("pr.json", JSON.stringify(pr));
+        receipt = resume();
+      }
+      assert.equal(
+        receipt.local.status,
+        "complete",
+        JSON.stringify(receipt.local),
+      );
+      assert.equal(receipt.local.main, sha);
+      assert.deepEqual(receipt.local.cleanup.deleted, ["feature"]);
+      assert.equal(git("branch", "--show-current").trim(), "main");
+      assert.equal(git("rev-parse", "HEAD").trim(), sha);
+      assert.equal(git("show", ":keep.txt"), "my index");
+      assert.equal(
+        readFileSync(join(dir, "keep.txt"), "utf8"),
+        "my working copy",
+      );
+      assert.equal(git("branch", "--list", "feature"), "");
+      assert.equal(resume().local.status, "complete");
+    },
+  );
+}
