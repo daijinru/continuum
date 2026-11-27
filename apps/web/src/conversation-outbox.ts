@@ -17,10 +17,14 @@ type Entry = {
 };
 
 const storageKey = "main-outbox";
+// The desktop development window can be recreated while a draft is open.
+export function conversationStorage(): Storage {
+  return import.meta.env.MODE === "desktop-dev" ? localStorage : sessionStorage;
+}
 function restore(): Entry[] {
   try {
     const saved: Entry[] = JSON.parse(
-      sessionStorage.getItem(storageKey) || "[]",
+      conversationStorage().getItem(storageKey) || "[]",
     );
     return saved
       .filter(
@@ -45,8 +49,8 @@ function publish(next: Entry[]) {
   const pending = next.filter((entry) => entry.status !== "sent");
   try {
     if (pending.length)
-      sessionStorage.setItem(storageKey, JSON.stringify(pending));
-    else sessionStorage.removeItem(storageKey);
+      conversationStorage().setItem(storageKey, JSON.stringify(pending));
+    else conversationStorage().removeItem(storageKey);
   } catch {
     /* Keep the in-memory queue usable when tab storage is full. */
   }

@@ -30,7 +30,11 @@ async function shutdown(restart: boolean) {
     process.exitCode = 1;
   }
 }
-const { app } = await createServer({
+const devWebDist = process.send
+  ? process.env.CONTINUUM_DEV_WEB_DIST
+  : undefined;
+const { app, db, agenda } = await createServer({
+  webDist: devWebDist,
   seed: process.env.CONTINUUM_SEED !== "0",
   restart:
     process.send || (execve && process.platform !== "win32")
@@ -43,6 +47,22 @@ const url = await app.listen({
 });
 console.log("Continuum " + url);
 if (process.send) {
+  if (devWebDist) {
+    const stopWhenIdle = (waiting = false) => {
+      if (closing) return;
+      if (
+        agenda.active.size ||
+        db.one("SELECT 1 FROM agent_runs WHERE finished IS NULL LIMIT 1")
+      ) {
+        if (!waiting)
+          console.log("[desktop:dev] 等待当前委托结束后更新客户端。");
+        setTimeout(stopWhenIdle, 2000, true).unref();
+      } else void shutdown(false);
+    };
+    process.on("message", (msg) => {
+      if (msg === "dev-stop-when-idle") stopWhenIdle();
+    });
+  }
   process.once("disconnect", () => void shutdown(false));
   if (process.connected) process.send({ ready: url });
   else void shutdown(false);

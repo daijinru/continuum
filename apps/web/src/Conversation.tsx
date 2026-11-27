@@ -2,7 +2,7 @@ import { messageKey } from "./chat-row-state.ts";
 import type { VirtuosoHandle } from "react-virtuoso";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api, useData, type Data } from "./lib.tsx";
-import { outgoingRow, queueMessage, reconcileOutbox, useOutbox } from "./conversation-outbox.ts";
+import { conversationStorage, outgoingRow, queueMessage, reconcileOutbox, useOutbox } from "./conversation-outbox.ts";
 import { tokenTotal } from "./TokenUsage.tsx";
 import { ArrowUp, CornerUpLeft, X } from "lucide-react";
 
@@ -15,7 +15,7 @@ export function Conversation({ focus }: { focus?: string }) {
     [more, setMore] = useState(false),
     [loaded, setLoaded] = useState(false);
   const [text, setText] = useState(
-      () => sessionStorage.getItem("main-draft") || "",
+      () => conversationStorage().getItem("main-draft") || "",
     ),
     [reply, setReply] = useState<Data | null>(null),
     [target, setTarget] = useState<Data | null>(null),
@@ -186,7 +186,7 @@ export function Conversation({ focus }: { focus?: string }) {
     });
     if (!quick) {
       setText("");
-      sessionStorage.removeItem("main-draft");
+      conversationStorage().removeItem("main-draft");
       setReply(null);
       if (focus) location.hash = "chat";
       editor.current?.focus();
@@ -257,7 +257,7 @@ export function Conversation({ focus }: { focus?: string }) {
               onChange={(e) => {
                 draftKey.current = crypto.randomUUID();
                 setText(e.target.value);
-                sessionStorage.setItem("main-draft", e.target.value);
+                conversationStorage().setItem("main-draft", e.target.value);
               }}
               maxLength={4000}
               rows={1}

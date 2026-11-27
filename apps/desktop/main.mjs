@@ -12,6 +12,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 const development = !app.isPackaged;
+const supervised =
+  development && !!process.send && !!process.env.CONTINUUM_DEV_WEB_DIST;
 if (development) {
   app.setName("Continuum Dev");
   if (!app.commandLine.hasSwitch("user-data-dir")) {
@@ -30,6 +32,7 @@ let wantWindow = true,
   checkingQuit = false;
 let crashes = [];
 let serviceEnv;
+let restartRequested = false;
 
 function environment() {
   const path = join(profile, "workbench.json");
@@ -84,7 +87,11 @@ function showWindow() {
       win = undefined;
       wantWindow = false;
     });
-    void win.loadURL(address).catch(console.error);
+    const initialHash = supervised ? process.env.CONTINUUM_DEV_HASH || "" : "";
+    if (supervised) delete process.env.CONTINUUM_DEV_HASH;
+    void win
+      .loadURL(address + (initialHash.startsWith("#") ? initialHash : ""))
+      .catch(console.error);
   }
   if (win.isMinimized()) win.restore();
   win.show();
@@ -110,10 +117,19 @@ function startService() {
     const url = new URL(message.ready);
     if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") return;
     address = url.origin;
+    if (supervised && process.connected) {
+      serviceEnv.PORT = url.port;
+      process.send({ type: "dev-ready", port: url.port });
+      if (restartRequested) {
+        proc.send("dev-stop-when-idle");
+        return;
+      }
+    }
     if (wantWindow) showWindow();
   });
   proc.once("close", (code) => {
     child = undefined;
+    if (restartRequested && !quitting) return relaunchDevelopment();
     address = undefined;
     const reopen = wantWindow;
     win?.destroy();
@@ -121,6 +137,10 @@ function startService() {
     if (quitting) return app.quit();
     crashes = crashes.filter((t) => Date.now() - t < 60000);
     if (code !== 75) crashes.push(Date.now());
+    if (crashes.length >= 3 && supervised) {
+      console.error("工作台服务未能启动，等待下一次保存。");
+      return;
+    }
     if (crashes.length >= 3) {
       dialog.showErrorBox(
         "工作台服务未能启动",
@@ -134,6 +154,25 @@ function startService() {
   });
 }
 
+function stopWorkbench() {
+  quitting = true;
+  clearTimeout(retry);
+  if (child) child.kill("SIGTERM");
+  else app.quit();
+}
+
+function relaunchDevelopment() {
+  if (!process.connected) return stopWorkbench();
+  process.send(
+    {
+      type: "dev-relaunch",
+      hidden: !wantWindow,
+      hash: win ? new URL(win.webContents.getURL() || "about:blank").hash : "",
+    },
+    stopWorkbench,
+  );
+}
+
 async function quitWorkbench() {
   if (checkingQuit) return;
   checkingQuit = true;
@@ -145,7 +184,7 @@ async function quitWorkbench() {
           signal: AbortSignal.timeout(4000),
         });
         const { data } = await res.json();
-        if (data.tasks.some((t) => t.runId || t.state === "watching"))
+        if (data.tasks.some((task) => task.runId || task.state === "watching"))
           warning = "有委托正在执行。现在退出可能会中断这些工作。";
       } catch {
         warning = "暂时无法确认委托状态。退出将停止本机服务。";
@@ -164,10 +203,7 @@ async function quitWorkbench() {
       )
         return;
     }
-    quitting = true;
-    clearTimeout(retry);
-    if (child) child.kill("SIGTERM");
-    else app.quit();
+    stopWorkbench();
   } finally {
     checkingQuit = false;
   }
@@ -227,7 +263,24 @@ else {
     .then(() => {
       if (development)
         app.dock?.setIcon(join(import.meta.dirname, "assets/continuum.png"));
-      wantWindow = !app.getLoginItemSettings().wasOpenedAtLogin;
+      wantWindow =
+        !(supervised && process.env.CONTINUUM_DEV_HIDDEN === "1") &&
+        !app.getLoginItemSettings().wasOpenedAtLogin;
+      if (supervised) {
+        process.on("message", (msg) => {
+          if (msg.type === "dev-refresh") win?.webContents.reload();
+          if (msg.type === "dev-restart" && !quitting && !restartRequested) {
+            restartRequested = true;
+            if (!child) relaunchDevelopment();
+            else if (address && child.connected)
+              child.send("dev-stop-when-idle");
+          }
+          if (msg.type === "dev-stop") stopWorkbench();
+        });
+        process.once("disconnect", stopWorkbench);
+        if (process.connected) process.send({ type: "dev-listening" });
+        else return stopWorkbench();
+      }
       app.on("activate", showWindow);
       tray = new Tray(nativeImage.createEmpty());
       tray.setTitle("Continuum");
@@ -237,6 +290,10 @@ else {
       startService();
     })
     .catch((err) => {
+      if (supervised) {
+        console.error("Continuum 开发客户端启动失败", err);
+        return app.exit(1);
+      }
       dialog.showErrorBox("Continuum 启动失败", err.message);
       quitting = true;
       app.quit();
