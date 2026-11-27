@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, dt, Head, Status } from "./lib.tsx";
-import type { MonitorSnapshot } from "../../../packages/contracts/src/monitor.ts";
+import type { MonitorSnapshot, WorkStatus } from "../../../packages/contracts/src/monitor.ts";
 
 type Task = MonitorSnapshot["tasks"][number];
 const labels: Record<Task["state"], string> = {
@@ -24,8 +24,8 @@ const groups: [string, Task["state"][]][] = [
 const number = (n: number) =>
   n.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
 
-export function Monitor() {
-  const [data, setData] = useState<MonitorSnapshot>(),
+function useMonitorSnapshot<T>(path: string) {
+  const [data, setData] = useState<T>(),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const active = useRef(false),
@@ -35,7 +35,7 @@ export function Monitor() {
     loading.current = true;
     setBusy(true);
     try {
-      const snapshot: MonitorSnapshot = await api("/system/monitor");
+      const snapshot: T = await api(path);
       if (active.current) {
         setData(snapshot);
         setError("");
@@ -46,7 +46,7 @@ export function Monitor() {
       loading.current = false;
       if (active.current) setBusy(false);
     }
-  }, []);
+  }, [path]);
   useEffect(() => {
     active.current = true;
     void refresh();
@@ -58,6 +58,26 @@ export function Monitor() {
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [refresh]);
+  return { data, error, busy, refresh };
+}
+
+export function WorkStatusLink() {
+  const { data, error } = useMonitorSnapshot<WorkStatus>("/conversation/work-status");
+  if (!data || error) return null;
+  const { kind, count, targetId } = data;
+  const decision = kind === "decision";
+  let href = "#monitor";
+  if (decision) href = targetId ? "#inbox/" + targetId : "#inbox";
+  else if (targetId) href = "#goal/" + targetId;
+  return (
+    <a className={"toolbar-link work-status" + (decision ? " needs-decision" : "")} href={href}>
+      {count} 项{decision ? "待你决定" : "执行中"}
+    </a>
+  );
+}
+
+export function Monitor() {
+  const { data, error, busy, refresh } = useMonitorSnapshot<MonitorSnapshot>("/system/monitor");
   const procs = data?.processes;
   const working = data?.tasks.filter((t) =>
     groups[0][1].includes(t.state),

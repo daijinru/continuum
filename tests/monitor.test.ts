@@ -7,6 +7,48 @@ import { createServer } from "../apps/api/src/server.ts";
 import { processTree } from "../apps/api/src/monitor.ts";
 import type { MonitorSnapshot } from "../packages/contracts/src/monitor.ts";
 
+test("主对话按委托计数，优先显示待决定事项，结束后隐藏提示", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "continuum-work-status-"));
+  const { app, db, s, agenda } = await createServer({ home, worker: false, seed: false });
+  t.after(async () => {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+  const status = async () => {
+    const result = await app.inject("/api/v1/conversation/work-status");
+    assert.equal(result.statusCode, 200, result.body);
+    return result.json().data;
+  };
+  const work = s.commission("待派发", crypto.randomUUID());
+  const watch = s.commission("热榜", crypto.randomUUID());
+  assert.equal(await status(), null);
+  const run = s.reserve(work, crypto.randomUUID(), "测试", null);
+  assert.deepEqual(await status(), { kind: "working", count: 1, targetId: work.id });
+  s.move(run, "running");
+  agenda.active.set(watch.id, Promise.resolve());
+  assert.deepEqual(await status(), { kind: "working", count: 2, targetId: null });
+
+  const ask = (runId: string, key: string) => s.event(runId, {
+    key, title: key, type: "approval.requested",
+    approval: { id: key, action: key, scope: "当前委托", reason: "需要确认", risk: "需要审查" },
+  });
+  ask(run.id, "第一条");
+  const first = db.must("SELECT id FROM inbox_items").id;
+  ask(run.id, "第二条");
+  await s.decide(first, { decision: "defer", version: 1, key: crypto.randomUUID() });
+  assert.deepEqual(await status(), { kind: "decision", count: 1, targetId: first });
+
+  agenda.active.delete(watch.id);
+  const second = s.reserve(watch, crypto.randomUUID(), "测试", null);
+  s.move(second, "running");
+  ask(second.id, "另一项委托的决定");
+  assert.deepEqual(await status(), { kind: "decision", count: 2, targetId: null });
+  for (const id of [run.id, second.id]) {
+    s.event(id, { key: "stop", title: "结束", type: "run.interrupted" });
+  }
+  assert.equal(await status(), null);
+});
+
 test("仅统计服务子树；排除采样自身、无关会话，子进程继承执行器归属", () => {
   const ps = `81 35 0.4 2048
     205 40 1.0 9999
