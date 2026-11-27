@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { post } from "./main-messages.ts";
 import { pendingDirectory, releaseDirectory } from "./directory-recovery.ts";
+import { followupFor, waitingFor, answerFollowup } from "./followups.ts";
 import { execMeter } from "./usage.ts";
 import {
   DirectoryUnavailable,
@@ -112,19 +113,23 @@ export function reportRun(db: Store, r: Row, type: string, title: string) {
     return;
   if (type === "succeeded" || type === "failed" || type === "interrupted") {
     const last = db.one(
-      "SELECT title FROM raw_events WHERE run_id=? AND type='agent.message' ORDER BY seq DESC LIMIT 1",
+      "SELECT title,json_extract(payload,'$.followup') question FROM raw_events WHERE run_id=? AND type='agent.message' ORDER BY seq DESC LIMIT 1",
       r.id,
     );
-    post(
+    const question = type === "succeeded" && last?.question;
+    const body = type === "succeeded"
+      ? last?.title || "本轮已结束，没有可阅读的回复。"
+      : `本轮${type === "interrupted" ? "已中断" : "未完成"}：${title}`;
+    const id = post(
       db,
       "assistant",
-      type === "succeeded" ? "result" : "problem",
-      type === "succeeded"
-        ? last?.title || "本轮已结束，没有可阅读的回复。"
-        : `本轮${type === "interrupted" ? "已中断" : "未完成"}：${title}`,
+      question ? "question" : type === "succeeded" ? "result" : "problem",
+      question && !body.includes(question) ? body + "\n\n" + question : body,
       [g.id],
       "run:" + r.id,
     );
+    if (question)
+      db.run("INSERT OR IGNORE INTO followup_questions(message_id,run_id,question) VALUES(?,?,?)", id, r.id, question);
   }
 }
 export function nextSlot(cadence: string, clock: string, from: Date) {
@@ -221,6 +226,10 @@ export function progress(db: Store, g: Row) {
   ) {
     facts.push("本次工作已排队，等待开始");
   } else if (r) {
+    const waiting = r.finished && !disabled && g.state === "active" && waitingFor(db, r.id);
+    if (waiting)
+      return g.title + "：" + (waiting.last_answer ? "已收到「" + String(waiting.last_answer).slice(0, 140) + "」。" : "") +
+        "正在等你补充：" + waiting.question;
     facts.push(labels[r.status] || r.status);
     const e = db.one(
       "SELECT title FROM raw_events WHERE run_id=? AND type IN ('agent.message','run.failed','system.disconnected','approval.requested','input.requested') ORDER BY seq DESC LIMIT 1",
@@ -447,12 +456,22 @@ export class MainConversation {
       db
         .all("SELECT goal_id FROM main_refs WHERE message_id=?", id)
         .map((r) => r.goal_id as string);
+    // Read the actual last message: the abbreviated routing history omits results.
+    const latest = reply ?? db.one("SELECT * FROM main_messages ORDER BY seq DESC LIMIT 1");
     const bound = b.replyTo ? refs(b.replyTo) : b.focus ? [b.focus] : [];
+    let questionMessage = reply ?? (latest?.kind === "question" ? latest : undefined);
+    const statusGoals = latest?.kind === "status" ? refs(latest.id) : [];
+    const questionGoal = !b.replyTo && b.focus ? b.focus : statusGoals.length === 1 ? statusGoals[0] : undefined;
+    if (questionGoal && (!reply || reply.kind === "status"))
+      questionMessage = db.one(`SELECT m.* FROM main_messages m JOIN followup_questions f ON f.message_id=m.id
+        WHERE f.answer_id IS NULL AND f.run_id=(SELECT id FROM agent_runs WHERE goal_id=? ORDER BY created DESC,rowid DESC LIMIT 1)`, questionGoal);
+    const candidate = questionMessage && followupFor(db, questionMessage);
+    const followup = b.focus && b.focus !== candidate?.goal ? undefined : candidate;
     const fresh = last && Date.now() - Date.parse(last.created) < 10 * 60_000;
     const focus =
       bound.length === 1
         ? bound[0]
-        : !b.replyTo &&
+        : followup ? followup.goal : !b.replyTo &&
             fresh &&
             (last.kind === "ack" || last.kind === "directory") &&
             refs(last.id).length === 1
@@ -589,7 +608,8 @@ export class MainConversation {
             .map(({ name, enabled }) => ({ name, enabled: !!enabled })),
           replyTargets: bound,
           recentFocus: focus,
-          replyText: reply?.body.slice(0, 400) ?? null,
+          replyText: followup ? followup.question : reply?.body.slice(0, 400) ?? null,
+          followup,
           recent: recent.map((m) => ({
             role: m.role,
             text: m.body,
@@ -600,8 +620,11 @@ export class MainConversation {
         },
         execMeter(db, null),
       );
-    // A clarifying question supersedes proposed side effects. All parts of a
-    // compound instruction commit together or none do.
+    const supplements = actions.filter(a => a.type === "supply" || a.type === "supply_partial");
+    if (supplements.length && (!followup || actions.length !== 1 || supplements[0].target !== followup.goal ||
+        (supplements[0].type === "supply_partial" && !supplements[0].text.trim())))
+      throw new Problem("无法将补充资料关联到原问题，请回复要补充的那条消息。");
+    // A clarifying question supersedes proposed side effects.
     const clarify = actions.find((a) => a.type === "clarify");
     if (clarify) actions = [clarify];
     for (const a of actions) {
@@ -644,6 +667,16 @@ export class MainConversation {
         b.focus ?? null,
       );
       for (const a of actions) {
+        if (a.type === "supply" || a.type === "supply_partial") {
+          const target = followup!;
+          links.push(target.goal);
+          const missing = a.type === "supply_partial" ? redact(a.text.trim()) : undefined;
+          if (!answerFollowup(db, target, user, text, missing))
+            answers.push("原问题当前不能继续接收资料。" + progress(db, this.s.goal(target.goal)));
+          else if (!missing)
+            answers.push("资料已收到，已排队继续原委托。");
+          continue;
+        }
         if (a.type === "talk" || a.type === "clarify") {
           answers.push(a.text);
           continue;

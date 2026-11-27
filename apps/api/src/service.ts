@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { DirectoryUnavailable, Store, now, uid, Problem, type Row } from "./db.ts";
 import { holdDirectory, pendingDirectory } from "./directory-recovery.ts";
+import { followupInstruction } from "./followups.ts";
 import { recordUsage } from "./usage.ts";
 import { reportRun, post } from "./main-conversation.ts";
 import {
@@ -151,7 +152,7 @@ export class Service {
         goal.id,
         goal.workspace_id,
       ),
-      instruction: run.instruction,
+      instruction: run.instruction + followupInstruction(this.db, run.goal_id, run.key),
       thread: run.thread_id,
       turn: run.turn_id,
       threadUsage: (thread, counts) => {

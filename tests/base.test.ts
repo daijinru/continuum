@@ -11,7 +11,7 @@ test("数据库迁移可重复打开，同时只允许一个服务持有数据�
   assert.throws(() => new Store(path));
   db.close();
   const reopened = new Store(path);
-  assert.equal(reopened.all("SELECT * FROM schema_migrations").length, 15);
+  assert.equal(reopened.all("SELECT * FROM schema_migrations").length, 16);
   reopened.close();
 });
 test("终态和未知态转换，凭据脱敏", () => {
