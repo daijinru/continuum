@@ -70,6 +70,14 @@ const desktop = await _electron.launch({
 try {
   const page = await desktop.firstWindow();
   await page.locator("textarea").first().waitFor();
+  assert.equal(
+    await page.evaluate(() => "continuumDevUpdate" in window),
+    false,
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "立即重启更新" }).count(),
+    0,
+  );
   const favicon = await page.locator('link[rel="icon"]').getAttribute("href");
   assert.equal(favicon, "/favicon.png");
   const iconWidth = await page.evaluate(async (url) => {
