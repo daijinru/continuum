@@ -2,6 +2,7 @@ import type { Link, Root, PhrasingContent } from "mdast";
 import { SKIP, visit } from "unist-util-visit";
 
 // Launch document formats with a viewer. A reply must never launch a program.
+export const previewImage = /\.(?:png|jpe?g|webp|gif|bmp|svg)$/i;
 export const documentFile =
   /\.(?:md|markdown|txt|log|csv|tsv|json|ya?ml|xml|pdf|rtf|docx?|xlsx?|pptx?|od[tsp]|png|jpe?g|gif|webp|heic|tiff?|bmp|mp[34]|wav|mov)$/i;
 
@@ -11,7 +12,7 @@ function localDocument(path: string) {
     !/^[a-z][\w+.-]*:|^\/\/|\\/i.test(path) &&
     !Array.from(path).some((char) => char.charCodeAt(0) < 32) &&
     !path.split("/").includes("..") &&
-    documentFile.test(path)
+    (documentFile.test(path) || previewImage.test(path))
   );
 }
 
@@ -45,6 +46,16 @@ export function markMessageFiles(tree: Root, found?: Set<string>) {
       definitions.set(definition.identifier, definition.url);
   });
   visit(tree, (node, index, parent) => {
+    if ((node.type === "image" || node.type === "imageReference") && parent && index !== undefined) {
+      const url = node.type === "image" ? node.url : definitions.get(node.identifier);
+      const path = url && linkPath(url);
+      if (path && previewImage.test(path)) {
+        found?.add(path);
+        parent.children[index] = { type: "image", url: "", alt: node.alt,
+          data: { hProperties: { "data-message-file": path } } };
+      }
+      return SKIP;
+    }
     if (node.type === "link") {
       const path = linkPath(node.url);
       if (path) mark(node, path);

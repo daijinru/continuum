@@ -13,7 +13,7 @@ import { Worker } from "../../worker/src/index.ts";
 import { conversationRunProgress, conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
 import { registerChatImages } from "./chat-images.ts";
-import { messageFile, openDocument } from "./message-files.ts";
+import { messageFile, openDocument, readPreview } from "./message-files.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import { goalUsage, workspaceUsage, recentCalls } from "./usage.ts";
 import {
@@ -163,6 +163,14 @@ export async function createServer(
      WHERE i.goal_id=? AND i.kind='approval' AND m.seq<? ORDER BY m.seq DESC LIMIT 30`,
     id, q.before ? offset({offset: q.before}) : Number.MAX_SAFE_INTEGER,
   ));
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    prefix + "/conversation/messages/:id/image", async (req, reply) => {
+      const path = z.string().min(1).max(4000).parse(req.query.path);
+      const { stream, mime } = await readPreview(db, req.params.id, path);
+      return reply.header("Cross-Origin-Resource-Policy", "same-origin")
+        .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'")
+        .type(mime).send(stream);
+    });
   post("/conversation/messages/:id/open-file", async ({ id, body }) => {
     const { path } = z.object({ path: z.string().min(1).max(4000) }).strict().parse(body);
     await (options.openDocument ?? openDocument)(messageFile(db, id, path));
