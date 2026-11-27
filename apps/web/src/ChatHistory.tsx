@@ -209,11 +209,11 @@ export default memo(function ChatHistory({
   );
 });
 
-function LongMessage({ text }: { text: string }) {
+function LongMessage({ text, messageId }: { text: string; messageId?: string }) {
   const [open, setOpen] = useRowState("full-text", false);
   return (
     <div className="long-message">
-      {!open && <Markdown text={text.split(/\n\s*\n/)[0].slice(0, 360)} />}
+      {!open && <Markdown messageId={messageId} text={text.split(/\n\s*\n/)[0].slice(0, 360)} />}
       <details className="read-more" open={open}>
         <summary
           onClick={(e) => {
@@ -223,7 +223,7 @@ function LongMessage({ text }: { text: string }) {
         >
           阅读全文
         </summary>
-        {open && <Markdown text={text} />}
+        {open && <Markdown messageId={messageId} text={text} />}
       </details>
     </div>
   );
@@ -237,6 +237,7 @@ function Message({
   replyTo,
   resolved,
 }: Actions & { m: Data; newDay: boolean; jump: (id: string) => void }) {
+  const fileMessageId = m.role === "assistant" && /^(run|event):/.test(m.origin) ? m.id : undefined;
   return (
     <>
       {newDay && (
@@ -272,9 +273,9 @@ function Message({
           </div>
           {m.quote && <Quote quote={m.quote} jump={jump} />}
           {m.body.length > 800 ? (
-            <LongMessage text={m.body} />
+            <LongMessage text={m.body} messageId={fileMessageId} />
           ) : (
-            <Markdown text={m.body} />
+            <Markdown text={m.body} messageId={fileMessageId} />
           )}
           {m.delivery === "failed" && (
             <div className="links">

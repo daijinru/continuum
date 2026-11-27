@@ -125,6 +125,7 @@ export const outputs: Record<string, ZodTypeAny> = {
   "GET /conversation": conversationRows,
   "GET /conversation/changes": row({ rows: conversationRows, version: z.number().int(), more: z.boolean() }),
   "GET /conversation/approvals/:id": z.array(row({ id, seq: z.number().int(), status: str, title: str, created: str })),
+  "POST /conversation/messages/:id/open-file": z.literal(true),
   "POST /conversation/messages": row({ id, seq: z.number().int(), created: str, body: str }),
   "POST /conversation/projects/:id": row({ id }),
   "POST /conversation/directories/:id": row({ id }),

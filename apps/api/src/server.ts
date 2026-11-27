@@ -12,6 +12,7 @@ import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
 import { conversationRunProgress, conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
+import { messageFile, openDocument } from "./message-files.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import { goalUsage, workspaceUsage, recentCalls } from "./usage.ts";
 import {
@@ -42,6 +43,7 @@ export async function createServer(
     delay?: number;
     worker?: boolean;
     restart?: () => void;
+    openDocument?: (path: string) => Promise<void>;
   } = {},
 ) {
   const db = new Store(options.home),
@@ -159,6 +161,11 @@ export async function createServer(
      WHERE i.goal_id=? AND i.kind='approval' AND m.seq<? ORDER BY m.seq DESC LIMIT 30`,
     id, q.before ? offset({offset: q.before}) : Number.MAX_SAFE_INTEGER,
   ));
+  post("/conversation/messages/:id/open-file", async ({ id, body }) => {
+    const { path } = z.object({ path: z.string().min(1).max(4000) }).strict().parse(body);
+    await (options.openDocument ?? openDocument)(messageFile(db, id, path));
+    return true;
+  });
   get("/conversation/log", () => db.all(
     `SELECT seq, at, stage, page_id, message_id, version, client_at
      FROM conversation_log ORDER BY seq DESC LIMIT 100`,

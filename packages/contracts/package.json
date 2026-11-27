@@ -1,1 +1,1 @@
-{"name":"@continuum/contracts","private":true,"type":"module"}
+{"name":"@continuum/contracts","private":true,"type":"module","dependencies":{"@types/mdast":"4.0.4","remark-gfm":"4.0.1","remark-parse":"11.0.0","unified":"11.0.5","unist-util-visit":"5.2.0"}}
