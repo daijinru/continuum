@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../apps/api/src/server.ts";
+import { recordChoice } from "../apps/api/src/usage.ts";
 import { MainAgenda } from "../apps/api/src/main-agenda.ts";
 
 test("临时研判、热榜和续跑分别归属；重复快照、快捷查询和重启不重复计数", async () => {
@@ -140,3 +141,43 @@ async function assertEventually(predicate: () => boolean) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(predicate());
 }
+
+test("委托列表取最近一轮的选模记录，同一时间按运行写入顺序区分", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "continuum-list-model-"));
+  const { s, db, app } = await createServer({
+    home,
+    worker: false,
+    seed: false,
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+  const goal = s.commission("列表测试", crypto.randomUUID());
+  const selection = async () => {
+    const res = await app.inject("/api/v1/goals");
+    assert.equal(res.statusCode, 200, res.body);
+    const [{ latest, latestModel, latestEffort }] = res.json().data;
+    return [latest, latestModel, latestEffort];
+  };
+  assert.deepEqual(await selection(), [null, null, null]);
+  const first = s.reserve(goal, crypto.randomUUID(), "第一轮", null);
+  recordChoice(db, first.id, "委托执行", "light", {
+    model: "sample-fast",
+    effort: "low",
+  });
+  s.move(first, "failed");
+  assert.deepEqual(await selection(), ["failed", "sample-fast", "low"]);
+  const second = s.reserve(goal, crypto.randomUUID(), "第二轮", null);
+  db.run(
+    "UPDATE agent_runs SET created=? WHERE id=?",
+    first.created,
+    second.id,
+  );
+  assert.deepEqual(await selection(), ["starting", null, null]);
+  recordChoice(db, second.id, "委托执行", "deep", {
+    model: "sample-deep",
+    effort: "high",
+  });
+  assert.deepEqual(await selection(), ["starting", "sample-deep", "high"]);
+});
