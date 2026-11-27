@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { Store, Problem, now, uid } from "./db.ts";
 import { Service } from "./service.ts";
 import { Worker } from "../../worker/src/index.ts";
-import { conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
+import { conversationRunProgress, conversationWorkStatus, monitorTasks, processSampler } from "./monitor.ts";
 import { MainConversation, projectDecision, sendInput, timeline } from "./main-conversation.ts";
 import { MainAgenda } from "./main-agenda.ts";
 import { goalUsage, workspaceUsage } from "./usage.ts";
@@ -201,6 +201,7 @@ export async function createServer(
     return conversation.resolveDirectory(id, path);
   });
   const processes = processSampler(() => s.adapters.codex.processRoots?.() ?? new Map());
+  get("/conversation/run-progress", () => conversationRunProgress(db));
   get("/conversation/work-status", () => conversationWorkStatus(db, agenda.active));
   get("/system/monitor", async () => ({
     ...await processes(),

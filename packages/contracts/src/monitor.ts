@@ -8,6 +8,13 @@ export const workStatus = z.object({
 }).nullable();
 export type WorkStatus = z.infer<typeof workStatus>;
 
+export const runProgress = z.array(z.object({
+  runId: id,
+  title: z.string(),
+  detail: z.string(),
+}));
+export type RunProgress = z.infer<typeof runProgress>;
+
 export const monitor = z.object({
   sampledAt: z.string().datetime(),
   processes: z

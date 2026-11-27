@@ -1391,6 +1391,26 @@ dialog::backdrop {
   display: block;
   margin: 8px 0;
 }
+.run-progress {
+  flex: none;
+  max-height: min(22vh, 8rem);
+  overflow-y: auto;
+  padding-block: 4px;
+  font-size: 13px;
+}
+.run-progress a {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-block: 3px;
+  color: var(--muted);
+}
+.run-progress strong, .run-progress span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.run-progress strong { max-width: 40%; flex-shrink: 0; }
 .main-composer {
   flex: none;
   border-top: 1px solid var(--line);

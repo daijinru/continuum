@@ -82,6 +82,28 @@ export function processSampler(roots: () => Map<number, string>) {
   };
 }
 
+// Read only the current run. Prefer the executor’s explanation to the
+// command events it produces while carrying out that same step.
+export function conversationRunProgress(db: Store) {
+  return db.all(`
+    SELECT r.id runId, g.title, coalesce(
+      (SELECT substr(e.title,1,240) FROM raw_events e WHERE e.run_id=r.id
+       AND e.type='agent.message' AND trim(e.title)!=''
+       AND coalesce(json_extract(e.payload,'$.delivery'),'')!='async'
+       AND coalesce(json_extract(e.payload,'$.phase'),'')!='final_answer'
+       AND json_extract(e.payload,'$.followup') IS NULL ORDER BY e.seq DESC LIMIT 1),
+      (SELECT CASE e.type WHEN 'tool.started' THEN '正在执行命令'
+         WHEN 'tool.completed' THEN '命令已结束' WHEN 'file.changed' THEN '已修改文件'
+         ELSE substr(e.title,1,240) END FROM raw_events e WHERE e.run_id=r.id
+       AND e.type IN ('plan.updated','tool.started','tool.completed','file.changed','test.completed')
+       ORDER BY e.seq DESC LIMIT 1),
+      CASE r.status WHEN 'starting' THEN '正在启动' ELSE '执行中' END
+    ) detail
+    FROM agent_runs r JOIN goals g ON g.id=r.goal_id
+    WHERE r.finished IS NULL AND r.status IN ('starting','running') AND g.state='active'
+    ORDER BY r.created,r.rowid`);
+}
+
 export function conversationWorkStatus(db: Store, watching: ReadonlyMap<string, unknown>): WorkStatus {
   const decisions = db.all(`
     SELECT id, goal_id FROM inbox_items i WHERE status IN ('pending','deferred')
