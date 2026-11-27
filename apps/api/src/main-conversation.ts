@@ -69,11 +69,18 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: 
         FROM notices GROUP BY goal_id
       )
       SELECT m.*, a.goal_id approvalGoal,a.total approvalTotal,a.pending approvalPending,
+      CASE WHEN original.id IS NOT NULL THEN json_object(
+        'type','message','id',original.id,'role',original.role,'kind',original.kind,'created',original.created,
+        'text',substr(original.body,1,240),'origin',original.origin)
+        WHEN selected.id IS NOT NULL THEN json_object('type','goal','id',selected.id,'text',selected.title)
+      END quote,
       substr(p.origin,7) nextApproval, json_extract(q.intent,'$.project') project, coalesce(q.resolved_by,h.resolved_by) resolvedBy,
       h.resolved_at directoryResolvedAt,
       w.path directoryPath, (g.state='active' AND w.enabled=1) canRecover,
       coalesce((SELECT json_group_array(json_object('id',g.id,'title',g.title)) FROM goals g JOIN main_refs r ON r.goal_id=g.id WHERE r.message_id=m.id),'[]') refs
     FROM main_messages m LEFT JOIN main_project_questions q ON q.message_id=m.id
+    LEFT JOIN main_messages original ON m.role='user' AND original.id=m.reply_to
+    LEFT JOIN goals selected ON selected.id=m.reply_goal
     LEFT JOIN directory_holds h ON h.notice_id=m.id LEFT JOIN workspaces w ON w.id=h.workspace_id
     LEFT JOIN goals g ON g.id=h.goal_id
     LEFT JOIN notices n ON n.seq=m.seq LEFT JOIN groups a ON a.goal_id=n.goal_id
@@ -87,7 +94,7 @@ export function timeline(db: Store, before = Number.MAX_SAFE_INTEGER, changed?: 
       ...(changed ? [JSON.stringify(changed)] : []),
     )
     .reverse()
-    .map((m) => ({ ...m, refs: JSON.parse(m.refs) }));
+    .map((m) => ({ ...m, quote: m.quote && JSON.parse(m.quote), refs: JSON.parse(m.refs) }));
 }
 export function reportRun(db: Store, r: Row, type: string, title: string) {
   const g = db.must("SELECT * FROM goals WHERE id=?", r.goal_id);
@@ -307,6 +314,7 @@ export class MainConversation {
         "project-answer:" + id,
         reply ? reply.replyTo || null : id,
         reply?.key || uid(),
+        reply?.focus ?? null,
       );
       if (created)
         db.run("INSERT INTO main_refs VALUES(?,?)", q.request_id, created.goal);
@@ -355,6 +363,7 @@ export class MainConversation {
         "in:" + key,
         reply ? (reply.replyTo ?? null) : id,
         key,
+        reply?.focus ?? null,
       );
       let answer: string;
       try {
@@ -377,7 +386,8 @@ export class MainConversation {
       if (
         previous.role !== "user" ||
         previous.body !== text ||
-        previous.reply_to !== (b.replyTo || null)
+        previous.reply_to !== (b.replyTo || null) ||
+        (previous.reply_goal && previous.reply_goal !== b.focus)
       )
         throw new Problem("消息编号冲突", 409);
       return { id: b.key };
@@ -631,6 +641,7 @@ export class MainConversation {
         "in:" + b.key,
         b.replyTo || null,
         b.key,
+        b.focus ?? null,
       );
       for (const a of actions) {
         if (a.type === "talk" || a.type === "clarify") {

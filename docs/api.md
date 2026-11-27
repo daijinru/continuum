@@ -37,6 +37,8 @@
 2. **翻看更早的消息。** `GET /conversation?before=<当前最早一行的 seq>` 返回严格早于该行的一页，顺序相同。把结果加在列表前面，继续沿用原来的变更版本。
 3. **补上变化。** `GET /stream` 在连接、重连和主对话变化时发送 `conversation` 事件，`data` 是当前变更版本。如果版本有差异，用上次已同步的版本请求 `GET /conversation/changes?since=<version>`。响应的 `data` 含 `rows`、`version`、`more`。按消息 `id` 合并，审批汇总按委托 `approvalGoal` 合并。每次处理后保存返回的 `version`，只要 `more` 为真就用它继续读。审批汇总可能把多条变更合成一行，不能用行数判断是否读完。
 
+历史页和增量更新都返回 `quote`。回复消息时，`quote.type` 为 `message`，含原消息 ID、作者角色、类别、创建时间、来源和正文开头的 240 个字符。针对委托发送时，类型为 `goal`，含委托 ID 和当前标题。两者的预览文字都放在 `text` 字段里。普通消息的 `quote` 为 `null`。
+
 例如，页面上已有一行操作审批。用户在另一个标签页处理后，`rows` 可以只返回更新后的汇总行。按 `approvalGoal` 替换原行就能显示最新待处理数。
 
 同一条 SSE 连接也发送活动流的 `change` 事件，其 `id` 是原始活动的 SQLite 序号，`data` 含事件和目标标识。活动重放支持首次连接的 `cursor` 及重连的 `Last-Event-ID`。主对话的 `conversation` 事件只带版本数据，两种进度分别保存。心跳为 SSE 注释。

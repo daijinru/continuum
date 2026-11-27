@@ -1,3 +1,4 @@
+import { replyQuote } from "./reply-quote.ts";
 import { z, type ZodTypeAny } from "zod";
 import { monitor, workStatus } from "./monitor.ts";
 const id = z.string().uuid(),
@@ -112,6 +113,7 @@ const conversationRows = z.array(
     body: str,
     created: str,
     refs: z.array(row({ id, title: str })),
+    quote: replyQuote.nullable(),
     approvalGoal: id.nullable(),
     approvalTotal: z.number().int().nullable(),
     approvalPending: z.number().int().nullable(),
