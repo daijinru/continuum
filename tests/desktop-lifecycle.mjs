@@ -70,6 +70,15 @@ const desktop = await _electron.launch({
 try {
   const page = await desktop.firstWindow();
   await page.locator("textarea").first().waitFor();
+  const favicon = await page.locator('link[rel="icon"]').getAttribute("href");
+  assert.equal(favicon, "/favicon.png");
+  const iconWidth = await page.evaluate(async (url) => {
+    const icon = new Image();
+    icon.src = url;
+    await icon.decode();
+    return icon.naturalWidth;
+  }, favicon);
+  assert.equal(iconWidth, 64);
   const url = new URL(page.url()).origin;
   const monitor = await (await fetch(url + "/api/v1/system/monitor")).json();
   const pid = monitor.data.processes.find((p) => p.role === "service").pid;

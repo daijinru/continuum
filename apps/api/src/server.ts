@@ -664,6 +664,9 @@ export async function createServer(
     });
   });
   const dist = resolve("apps/web/dist");
+  app.get("/favicon.png", (_req, reply) =>
+    reply.type("image/png").send(readFileSync(join(dist, "favicon.png"))),
+  );
   app.get("/*", (req, reply) => {
     const path = (req.params as any)["*"];
     if (path.startsWith("api/") || path.includes(".."))
