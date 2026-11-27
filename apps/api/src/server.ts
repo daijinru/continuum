@@ -297,7 +297,8 @@ export async function createServer(
              WHEN EXISTS(SELECT 1 FROM stories st WHERE st.goal_id=g.id AND st.verification='verified') THEN 'on_track'
              ELSE 'unknown' END health,
         (SELECT count(*) FROM inbox_items i WHERE i.goal_id=g.id AND i.status IN('pending','deferred')) pending,
-        r.status latest, c.model latestModel, c.effort latestEffort
+        r.status latest, c.model latestModel, c.effort latestEffort, c.total latestTokens,
+        r.created latestCreated, r.finished latestFinished
        FROM goals g JOIN workspaces w ON w.id=g.workspace_id
        LEFT JOIN agent_runs r ON r.rowid=(
          SELECT ar.rowid FROM agent_runs ar WHERE ar.goal_id=g.id ORDER BY ar.created DESC, ar.rowid DESC LIMIT 1

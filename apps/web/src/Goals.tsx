@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Plus,
   ChevronLeft,
@@ -137,6 +137,19 @@ function GoalForm({ close }: { close: () => void }) {
 const goalsViewKey = "continuum-goals-view";
 const goalsViews = { compact: "紧凑视图", detailed: "详细视图" } as const;
 
+const liveStatuses = new Set(["queued", "starting", "running", "waiting_approval"]);
+
+function latestDuration(goal: Data, now: number) {
+  if (!goal.latestCreated || (!goal.latestFinished && !liveStatuses.has(goal.latest))) return "耗时待确认";
+  const end = goal.latestFinished ? Date.parse(goal.latestFinished) : now;
+  const ms = Math.max(0, end - Date.parse(goal.latestCreated));
+  if (!Number.isFinite(ms)) return "耗时待确认";
+  const duration = ms < 60_000
+    ? (ms / 1000).toFixed(1) + " 秒"
+    : `${Math.floor(ms / 60_000)} 分 ${Math.floor(ms / 1000) % 60} 秒`;
+  return (goal.latestFinished ? "耗时 " : "已用时 ") + duration;
+}
+
 export function Goals() {
   const { data, error } = useData("/goals"),
     [creating, set] = useState(false);
@@ -144,6 +157,14 @@ export function Goals() {
     localStorage.getItem(goalsViewKey) === "detailed" ? "detailed" : "compact",
   );
   const detailed = view === "detailed";
+  const hasLiveRun = data?.some(g => liveStatuses.has(g.latest) && !g.latestFinished);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasLiveRun]);
   return (
     <>
       <Head
@@ -216,9 +237,15 @@ export function Goals() {
                         ? "查看运行记录"
                         : "可启动首轮任务"}{" "}
                   · {dt(g.updated)}
-                  {g.provider === "codex" && g.latest && (
+                  {g.latest && (
                     <span>
-                      最近一轮 · {g.latestModel || "模型未记录"} · {g.latestEffort ? "推理强度 " + g.latestEffort : "推理强度未记录"}
+                      最近一轮 · {g.provider === "codex" ? (
+                        <>
+                          {g.latestModel || "模型未记录"} ·{" "}
+                          {g.latestEffort ? "推理强度 " + g.latestEffort : "推理强度未记录"} ·{" "}
+                          {g.latestTokens == null ? "用量未报告" : tokenTotal({ total: g.latestTokens })}
+                        </>
+                      ) : "演示运行"} · {latestDuration(g, now)}
                     </span>
                   )}
                 </div>

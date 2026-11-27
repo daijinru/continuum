@@ -165,7 +165,10 @@ export const outputs: Record<string, ZodTypeAny> = {
   "POST /workspaces": workspace,
   "POST /workspaces/choose-folder": row({ path: str }),
   "PATCH /workspaces/:id": row({ id, enabled: z.boolean() }),
-  "GET /goals": z.array(goal.extend({ latest: status.nullable(), latestModel: str.nullable(), latestEffort: str.nullable() })),
+  "GET /goals": z.array(goal.extend({
+    latest: status.nullable(), latestModel: str.nullable(), latestEffort: str.nullable(),
+    latestTokens: z.number().int().nonnegative().nullable(), latestCreated: str.nullable(), latestFinished: str.nullable(),
+  })),
   "GET /goals/:id": goal.extend({ usage, approvalGrant: id.nullable(), maskedCommandGrant: id.nullable() }),
   "POST /goals/:id/revoke-approval": row({ id }),
   "PATCH /goals/:id": goal,

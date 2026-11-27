@@ -87,6 +87,11 @@ if (process.argv.includes("exec")) {
       // turn/completed may arrive in a different pipe read than turn/start.
       await assertEventually(() => api.s.run(r.id).status === "succeeded");
       assert.equal((await goal(work.id)).total, resumed ? 50 : 30);
+      const list = (await api.app.inject("/api/v1/goals")).json().data;
+      const row = list.find((g: { id: string }) => g.id === work.id);
+      assert.equal(row.latestTokens, resumed ? 20 : 30);
+      assert.equal(row.latestCreated, r.created);
+      assert.equal(row.latestFinished, api.s.run(r.id).finished);
     }
     const directory = (await api.app.inject("/api/v1/models")).json().data;
     assert.deepEqual(directory.choices, {
@@ -157,27 +162,28 @@ test("委托列表取最近一轮的选模记录，同一时间按运行写入�
   const selection = async () => {
     const res = await app.inject("/api/v1/goals");
     assert.equal(res.statusCode, 200, res.body);
-    const [{ latest, latestModel, latestEffort }] = res.json().data;
-    return [latest, latestModel, latestEffort];
+    const [{ latest, latestModel, latestEffort, latestTokens }] = res.json().data;
+    return [latest, latestModel, latestEffort, latestTokens];
   };
-  assert.deepEqual(await selection(), [null, null, null]);
+  assert.deepEqual(await selection(), [null, null, null, null]);
   const first = s.reserve(goal, crypto.randomUUID(), "第一轮", null);
   recordChoice(db, first.id, "委托执行", "light", {
     model: "sample-fast",
     effort: "low",
   });
+  s.context(first).threadUsage?.("list-thread", { input: 0, output: 0, total: 0 });
   s.move(first, "failed");
-  assert.deepEqual(await selection(), ["failed", "sample-fast", "low"]);
+  assert.deepEqual(await selection(), ["failed", "sample-fast", "low", 0]);
   const second = s.reserve(goal, crypto.randomUUID(), "第二轮", null);
   db.run(
     "UPDATE agent_runs SET created=? WHERE id=?",
     first.created,
     second.id,
   );
-  assert.deepEqual(await selection(), ["starting", null, null]);
+  assert.deepEqual(await selection(), ["starting", null, null, null]);
   recordChoice(db, second.id, "委托执行", "deep", {
     model: "sample-deep",
     effort: "high",
   });
-  assert.deepEqual(await selection(), ["starting", "sample-deep", "high"]);
+  assert.deepEqual(await selection(), ["starting", "sample-deep", "high", null]);
 });
