@@ -97,3 +97,72 @@ test("从主对话打开本轮文件，重载后仍可打开，并说明文件�
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("助手回复中的本地图片可以预览、放大，刷新历史后仍可查看", async ({
+  page,
+}) => {
+  const home = mkdtempSync(join(tmpdir(), "continuum-preview-"));
+  const { app, s, worker } = await createServer({
+    home,
+    seed: false,
+    worker: false,
+    webDist: fileURLToPath(new URL("../../apps/web/dist/", import.meta.url)),
+  });
+  const raster = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhZkAAAAASUVORK5CYII=",
+    "base64",
+  );
+  s.adapters.codex.start = async (ctx) => {
+    mkdirSync(join(ctx.workspace, "图表"));
+    writeFileSync(
+      join(ctx.workspace, "图表", "流程 图.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="100" height="50"/></svg>',
+    );
+    writeFileSync(join(ctx.workspace, "结果.png"), raster);
+    writeFileSync(join(home, "外部.png"), raster);
+    symlinkSync(join(home, "外部.png"), join(ctx.workspace, "越界.png"));
+    ctx.emit({ type: "run.started", key: "start", title: "开始" });
+    ctx.emit({
+      type: "agent.message",
+      key: "reply",
+      title:
+        "![执行流程][chart]\n\n[chart]: <图表/流程 图.svg>\n\n截图：结果.png。\n\n![遗失](旧图.png) ![目录外](越界.png)",
+    });
+    ctx.emit({ type: "run.completed", key: "done", title: "结束" });
+  };
+  try {
+    s.commission("交付图表", crypto.randomUUID());
+    await worker.tick();
+    const url = await app.listen({ host: "127.0.0.1", port: 0 });
+    await page.goto(url + "/#chat");
+    for (let visit = 0; visit < 2; visit++) {
+      const plot = page.getByRole("button", { name: "查看原图：执行流程" });
+      await expect(plot.getByRole("img")).toHaveJSProperty("naturalWidth", 120);
+      await plot.click();
+      await expect(page.getByRole("dialog").getByRole("img")).toHaveJSProperty(
+        "naturalWidth",
+        120,
+      );
+      await page.keyboard.press("Escape");
+      await expect(
+        page
+          .getByRole("button", { name: "查看原图：结果.png" })
+          .getByRole("img"),
+      ).toHaveJSProperty("naturalWidth", 1);
+      await expect(
+        page.getByRole("button", { name: "结果.png", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("遗失（无法预览，请检查原文件）"),
+      ).toBeVisible();
+      await expect(
+        page.getByText("目录外（无法预览，请检查原文件）"),
+      ).toBeVisible();
+      if (!visit) await page.reload();
+    }
+  } finally {
+    await page.close();
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

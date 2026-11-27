@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
+import { constants, realpathSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { previewImage } from "../../../packages/contracts/src/message-files.ts";
+import { imageMime } from "./chat-images.ts";
 import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -8,7 +11,12 @@ import {
 } from "../../../packages/contracts/src/parse-message-files.ts";
 import { Problem, verifiedFile, type Store } from "./db.ts";
 
-export function messageFile(db: Store, id: string, reference: string) {
+export function messageFile(
+  db: Store,
+  id: string,
+  reference: string,
+  preview = false,
+) {
   const message = db.must(
     `SELECT m.body,r.id run_id,coalesce((
         SELECT h.workspace_id FROM directory_holds h WHERE h.goal_id=g.id
@@ -37,9 +45,44 @@ export function messageFile(db: Store, id: string, reference: string) {
   const actual = verifiedFile(root, target);
   if (!actual)
     throw new Problem("在本轮项目目录中找不到文件，文件可能已移动或删除", 404);
+  if (preview) {
+    if (!previewImage.test(actual)) throw new Problem("此文件不支持图片预览");
+    return actual;
+  }
   if (!documentFile.test(actual) || statSync(actual).mode & 0o111)
     throw new Problem("此文件类型不支持直接打开");
   return actual;
+}
+
+export async function readPreview(db: Store, id: string, reference: string) {
+  const path = messageFile(db, id, reference, true);
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = await handle.stat();
+    // Check the opened file as well: a project folder may move during the
+    // asynchronous open, including being replaced with a symlink.
+    const current = statSync(path);
+    if (realpathSync(path) !== path || stat.dev !== current.dev || stat.ino !== current.ino ||
+        !stat.isFile() || !stat.size) throw new Problem("图片已变更或不可读取");
+    const head = Buffer.alloc(Math.min(4096, stat.size));
+    await handle.read(head, 0, head.length, 0);
+    let mime: string | undefined = imageMime(head);
+    if (/^GIF8[79]a/.test(head.toString("ascii", 0, 6))) mime = "image/gif";
+    else if (head.toString("ascii", 0, 2) === "BM") mime = "image/bmp";
+    else if (/\.svg$/i.test(path) && /<svg[\s>]/.test(head.toString("utf8")))
+      mime = "image/svg+xml";
+    if (!mime) throw new Problem("无法识别图片格式");
+    return {
+      mime,
+      stream: handle.createReadStream({ start: 0, end: stat.size - 1 }),
+    };
+  } catch (e) {
+    await handle.close();
+    throw e;
+  }
 }
 
 export async function openDocument(path: string) {

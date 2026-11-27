@@ -1582,3 +1582,5 @@ dialog::backdrop {
 .image-dialog::backdrop { background: rgb(0 0 0 / 65%); }
 .image-dialog img { display: block; max-width: 90vw; max-height: 80vh; object-fit: contain; }
 .image-dialog button { display: block; margin: 0 0 6px auto; }
+
+.reply-image { display: inline-flex; flex-direction: column; align-items: flex-start; max-width: 100%; vertical-align: middle; }
