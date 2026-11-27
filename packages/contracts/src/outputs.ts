@@ -114,6 +114,7 @@ const conversationRows = z.array(
     body: str,
     created: str,
     refs: z.array(row({ id, title: str })),
+    images: z.array(id),
     quote: replyQuote.nullable(),
     approvalGoal: id.nullable(),
     approvalTotal: z.number().int().nullable(),

@@ -1,3 +1,5 @@
+import { chatImageUrl } from "../../../packages/contracts/src/chat-images.ts";
+import { ImagePreview } from "./ImagePreview.tsx";
 import { observeMessage } from "./conversation-log.ts";
 import React, { memo, useEffect, useState, useLayoutEffect, useRef, type RefObject } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -277,6 +279,8 @@ function Message({
           ) : (
             <Markdown text={m.body} messageId={fileMessageId} />
           )}
+          {!!m.images?.length && <div className="chat-image-list">{m.images.map((id: string, index: number) =>
+            <ImagePreview key={id} src={chatImageUrl(id)} alt={`发送的图片 ${index + 1}`} />)}</div>}
           {m.delivery === "failed" && (
             <div className="links">
               <span role="alert">{m.error}</span>
