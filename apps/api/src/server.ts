@@ -35,6 +35,7 @@ import { checkCodex } from "../../../packages/codex-adapter/src/index.ts";
 export async function createServer(
   options: {
     home?: string;
+    webDist?: string;
     seed?: boolean;
     delay?: number;
     worker?: boolean;
@@ -48,7 +49,12 @@ export async function createServer(
     agenda = new MainAgenda(s);
   await s.recover();
   if (options.seed !== false) s.seed();
-  const app = Fastify({ bodyLimit: 32768, logger: false });
+  const app = Fastify({
+    bodyLimit: 32768, logger: false,
+    // Chromium can preconnect without sending a request. Release those sockets
+    // too when the development client hands the port to its next instance.
+    forceCloseConnections: options.webDist ? true : "idle",
+  });
   const token = randomBytes(32).toString("hex"),
     instance = uid(),
     prefix = "/api/v1";
@@ -663,7 +669,7 @@ export async function createServer(
       s.bus.off("event", flush);
     });
   });
-  const dist = resolve("apps/web/dist");
+  const dist = resolve(options.webDist ?? "apps/web/dist");
   app.get("/favicon.png", (_req, reply) =>
     reply.type("image/png").send(readFileSync(join(dist, "favicon.png"))),
   );
