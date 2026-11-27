@@ -31,10 +31,23 @@ const localTime = new Intl.DateTimeFormat("zh-CN", {
   fractionalSecondDigits: 3, hourCycle: "h23",
 });
 
-export function ConversationLogViewer() {
+export function ConversationLogViewer({ directory }: { directory: string }) {
   const [rows, setRows] = useState<ConversationLogEntry[]>(),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [opening, setOpening] = useState(false),
+    [folderError, setFolderError] = useState(false);
+  async function openFolder() {
+    setOpening(true);
+    setFolderError(false);
+    try {
+      await api("/conversation/log/open-folder", {});
+    } catch {
+      setFolderError(true);
+    } finally {
+      setOpening(false);
+    }
+  }
   async function refresh() {
     setBusy(true);
     setError("");
@@ -48,12 +61,18 @@ export function ConversationLogViewer() {
   }
   return (
     <section className="panel pad" aria-labelledby="conversation-log-title">
-      <div className="section-head">
+      <div className="section-head log-heading">
         <h2 id="conversation-log-title">主对话日志</h2>
-        <button type="button" onClick={refresh} disabled={busy}>
-          {busy ? "读取中…" : rows || error ? "刷新日志" : "查看日志"}
-        </button>
+        <div className="actions">
+          <button type="button" onClick={refresh} disabled={busy}>
+            {busy ? "读取中…" : rows || error ? "刷新日志" : "查看日志"}
+          </button>
+          <button type="button" onClick={openFolder} disabled={opening}>
+            {opening ? "正在打开…" : "打开日志文件夹"}
+          </button>
+        </div>
       </div>
+      {folderError && <p role="alert">日志文件夹未能打开，请手动前往 <code>{directory}</code>。</p>}
       <p className="muted">按本机时间查看最近 100 条消息收发和页面连接记录，最新的在前。</p>
       {error && <Status error={error} />}
       {rows?.length === 0 && !error && <p role="status">暂无主对话日志。</p>}

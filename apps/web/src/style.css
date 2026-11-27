@@ -1132,6 +1132,8 @@ dialog::backdrop {
 .section-disclosure h2, .section-disclosure h3 { font-size: .95rem; margin: 12px 0 6px; }
 .section-disclosure .story { padding-inline: 0; }
 .section-disclosure .story + .story { border-top: 1px solid var(--rule); }
+.log-heading { flex-wrap: wrap; }
+.log-heading + [role="alert"] { overflow-wrap: anywhere; }
 .conversation-log-list {
   max-height: 24rem;
   overflow: auto;

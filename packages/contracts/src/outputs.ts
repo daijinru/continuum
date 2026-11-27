@@ -140,6 +140,7 @@ export const outputs: Record<string, ZodTypeAny> = {
   "GET /conversation/run-progress": runProgress,
   "GET /conversation/work-status": workStatus,
   "POST /conversation/log": z.boolean(),
+  "POST /conversation/log/open-folder": z.literal(true),
   "GET /conversation/log": z.array(conversationLogEntry),
   "GET /agent-connections": z.array(connection),
   "POST /agent-connections/check": row({
