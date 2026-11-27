@@ -160,12 +160,13 @@ function agent(mode) {
   }
   if (mode === "status") return { installed: existsSync(file), loaded, label };
   if (loaded) call("launchctl", ["bootout", service]);
-  if (mode === "off") {
-    rmSync(file, { force: true });
-    return { enabled: false, label };
-  }
   const dir = join(common, "continuum-harness"),
     script = join(dir, "merged-branches.mjs");
+  if (mode === "off") {
+    rmSync(file, { force: true });
+    rmSync(script, { force: true });
+    return { enabled: false, label };
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   copyFileSync(self, script);
   const root = git("worktree", "list", "--porcelain", "-z")
