@@ -133,3 +133,47 @@ test("实时流断开后从 Last-Event-ID 重放持久化事件", async ({ reque
   const second = await read(0, String(first));
   expect(second).toBe(activity.find((e: { seq: number }) => e.seq > first).seq);
 });
+
+test("我的委托默认紧凑，两种视图都能打开详情并记住选择", async ({ page }) => {
+  await page.goto("/#goals");
+  const compact = page.getByRole("button", { name: "紧凑视图" });
+  const detailed = page.getByRole("button", { name: "详细视图" });
+  const rows = page.locator(".goalcard");
+  const first = rows.first();
+  await expect(compact).toHaveAttribute("aria-pressed", "true");
+  await expect(first).toBeVisible();
+  const links = () =>
+    rows.evaluateAll((items) => items.map((a) => a.getAttribute("href")));
+  const compactLinks = await links();
+  const compactHeight = await first.evaluate((row) => row.clientHeight);
+  const title = await first.getByRole("heading").innerText();
+  await first.click();
+  await expect(
+    page.getByRole("heading", { name: title, exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+
+  await detailed.click();
+  await expect(first.locator(".provider")).toBeVisible();
+  expect(await links()).toEqual(compactLinks);
+  expect(await first.evaluate((row) => row.clientHeight)).toBeGreaterThan(
+    compactHeight,
+  );
+  await first.click();
+  await expect(
+    page.getByRole("heading", { name: title, exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await page.reload();
+  await expect(detailed).toHaveAttribute("aria-pressed", "true");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await compact.click();
+  await expect(first.locator(".provider")).toHaveCount(0);
+  await expect(first).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
