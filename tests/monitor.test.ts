@@ -131,3 +131,31 @@ test("只读监测区分在途、排队、等待、失联、暂停与原生排�
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("主对话运行进展只取当前运行的普通说明，异步投递、待补资料与最终答复各走原入口", async t => {
+  const {app,s,db} = await createServer({
+    home:mkdtempSync(join(tmpdir(),"continuum-progress-")), seed:false,worker:false,
+  });
+  t.after(() => app.close());
+  const goal = s.commission("核对样稿",crypto.randomUUID());
+  const r = s.reserve(goal,crypto.randomUUID(),"核对样稿",null);
+  const progress = async () => {
+    const response = await app.inject("/api/v1/conversation/run-progress");
+    assert.equal(response.statusCode,200,response.body);
+    return response.json().data;
+  };
+  assert.deepEqual(await progress(),[{runId:r.id,title:goal.title,detail:"正在启动"}]);
+  s.event(r.id,{key:"start",type:"run.started",title:"开始"});
+  s.event(r.id,{key:"tool",type:"tool.started",title:"命令",data:{command:"synthetic-command"}});
+  assert.equal((await progress())[0].detail,"正在执行命令");
+  s.event(r.id,{key:"msg",type:"agent.message",title:"正在核对来源"});
+  for (const [key,data] of Object.entries({notice:{delivery:"async"},question:{followup:"请补充资料"},final:{phase:"final_answer"}})) {
+    s.event(r.id,{key,type:"agent.message",title:key,data});
+  }
+  assert.equal((await progress())[0].detail,"正在核对来源");
+  db.run("UPDATE goals SET state='paused' WHERE id=?",goal.id);
+  assert.deepEqual(await progress(),[]);
+  db.run("UPDATE goals SET state='active' WHERE id=?",goal.id);
+  s.event(r.id,{key:"lost",type:"system.disconnected",title:"失联"});
+  assert.deepEqual(await progress(),[]);
+});

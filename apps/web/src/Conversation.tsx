@@ -1,3 +1,4 @@
+import { RunProgressList } from "./RunProgressList.tsx";
 import { logPage } from "./conversation-log.ts";
 import { messageQuote, type ReplyQuote } from "./reply-quote.ts";
 import { messageKey } from "./chat-row-state.ts";
@@ -10,7 +11,7 @@ import { ArrowUp, CornerUpLeft, X } from "lucide-react";
 
 const ChatHistory = React.lazy(() => import("./ChatHistory.tsx"));
 
-export function Conversation({ focus }: { focus?: string }) {
+export function Conversation({ focus, live }: { focus?: string; live: boolean }) {
   const { data: settings } = useData<Data>("/settings");
   const outbox = useOutbox();
   const [{ rows: messages, firstIndex }, setHistory] = useState({ rows: [] as Data[], firstIndex: 1 }),
@@ -225,6 +226,7 @@ export function Conversation({ focus }: { focus?: string }) {
           resolved={resolved}
         />
       </React.Suspense>
+      {live && <RunProgressList />}
       <form
         className="main-composer"
         onSubmit={(e) => {

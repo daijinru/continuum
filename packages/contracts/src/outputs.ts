@@ -1,6 +1,6 @@
 import { replyQuote } from "./reply-quote.ts";
 import { z, type ZodTypeAny } from "zod";
-import { monitor, workStatus } from "./monitor.ts";
+import { monitor, runProgress, workStatus } from "./monitor.ts";
 const id = z.string().uuid(),
   str = z.string(),
   row = (shape: Record<string, ZodTypeAny>) => z.object(shape).passthrough();
@@ -136,6 +136,7 @@ export const outputs: Record<string, ZodTypeAny> = {
     connections: z.array(connection),
   }),
   "GET /system/monitor": monitor,
+  "GET /conversation/run-progress": runProgress,
   "GET /conversation/work-status": workStatus,
   "POST /conversation/log": z.boolean(),
   "GET /agent-connections": z.array(connection),
