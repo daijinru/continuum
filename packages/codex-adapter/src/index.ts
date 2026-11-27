@@ -451,6 +451,7 @@ export class CodexAdapter implements AgentAdapter {
         type: "agent.message",
         title: redact(item.text) || question || "Codex 消息",
         data: {
+          ...(item.phase ? { phase: item.phase } : {}),
           ...(item.delivery === "async" ? { delivery: "async" } : {}),
           ...(question ? { followup: redact(question) } : {}),
         },

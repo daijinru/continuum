@@ -236,7 +236,7 @@ function App() {
           {import.meta.env.MODE === "desktop-dev" && <DevUpdateNotice />}
           <main key={page}>
             {page === "chat" ? (
-              <Conversation focus={id} />
+              <Conversation focus={id} live={live} />
             ) : page === "today" ? (
               <Today />
             ) : page === "goals" ? (
