@@ -74,14 +74,13 @@ push 仅向目标仓库推送当前非 main/master 工作分支，不强推。�
 
 GitHub 仓库设置 **Automatically delete head branches** 已开启。合并 PR 后由 GitHub 删除同仓源分支（受保护分支仍受规则限制）。这个设置不会删除开发者机器上的 `refs/heads/*`。本仓库默认分支是 `main`。
 
+默认按需清理本地分支。PR 合入后，在当前检出切回 `main` 并快进到最新的 `origin/main`，再运行：
+
 ```sh
-pnpm harness branch auto on          # 本机 macOS、此检出安装/更新一次
-pnpm harness branch auto status
-pnpm harness branch cleanup --dry-run
-pnpm harness branch cleanup         # 立即执行；其他系统也可以定时运行
-pnpm harness branch auto off
+pnpm harness branch cleanup --dry-run   # 预览将删除和保留的分支
+pnpm harness branch cleanup             # 执行清理
 ```
 
-本地任务使用用户级 LaunchAgent，登录后及每 5 分钟检查；依赖已登录的 `gh`、Git 和 Node。若有待核对的闲置工作分支，先 `fetch --prune`，再核对 GitHub 上已合并到默认分支的同仓 PR。**只有远端同名分支已消失、PR head 等于本地尖端、该提交是远端默认分支的祖先时，才尝试 `git branch -d`**。该策略匹配 harness 的普通 merge；不能证明等价的 squash/rebase 不自动清理。网络失败就留待下轮。
+有闲置分支时，harness 更新远端引用，再核对 GitHub 的合并记录。只有远端同名分支已消失、本地尖端等于已合并 PR 的尖端、且该提交已进入默认分支时，才会尝试 `git branch -d`。任何检出仍在使用的分支、`main` 和 `master` 都会保留。网络失败后可重新运行。
 
-后台不切换任何工作树。PR 合并后，在原工作树自行 `git switch main`、`git pull --ff-only`；不再有 worktree 占用的分支会在下一轮清理。`main`/`master`、含未合入提交的分支、当前及其他工作树正在使用的分支均保留。安装时把清理程序复制到此仓库 Git 公共目录，切换分支不影响定时任务；脚本升级或仓库移动后重新安装。
+如果这台 Mac 以前配置过每五分钟清理一次，运行 `pnpm harness branch auto off` 会卸载本检出的登录项，并移除专用的脚本副本。可用 `pnpm harness branch auto status` 核对，卸载后 `installed` 和 `loaded` 均为 `false`。按需清理直接使用仓库里的脚本。

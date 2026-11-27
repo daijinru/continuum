@@ -79,6 +79,6 @@ pnpm lint
 
 日常 PR 以 GitHub Actions 的 `lint` 为必需检查；按改动补跑 `pnpm typecheck`、`pnpm test`、`pnpm build` 或构建后的 `pnpm test:e2e`。浏览器测试使用临时数据库和 4389 端口，可设置 `CHROME_PATH`。`pnpm test:codex` 是独立的真实模型验收，需要有效登录并消耗模型配额。
 
-工作分支推送后，用 `pnpm harness pr submit --issue N` 申请自动合并并跟到合入 **`main`**。若检查失败，在原分支修复、验证并推送，用 `pnpm harness pr watch <PR编号>` 接续。GitHub 在合并后自动删除远端源分支。本机自动清理设置和保留条件见 [分支清理](docs/harness.md#分支清理)。
+工作分支推送后，用 `pnpm harness pr submit --issue N` 申请自动合并并跟到合入 **`main`**。若检查失败，在原分支修复、验证并推送，用 `pnpm harness pr watch <PR编号>` 接续。GitHub 在合并后自动删除远端源分支。本地按需清理命令和保留条件见 [分支清理](docs/harness.md#分支清理)。
 
 第一次接手开发，可以从[开发交接](docs/development-handoff.md)了解一条消息如何变成委托，以及该从哪个测试开始。按需查阅[架构与恢复](docs/architecture.md)、[本机 API](docs/api.md)、[Codex 协议](docs/protocol.md)、[仓库 harness](docs/harness.md) 和[界面设计](design-demos/macos/direction-approved.md)。
